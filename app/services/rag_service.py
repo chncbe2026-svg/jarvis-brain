@@ -191,3 +191,6 @@ If the CONTEXT is irrelevant, use your general knowledge but mention you are doi
         return {"answer": response.choices[0].message.content, "sources": sources}
 
 rag_service = RAGService()
+
+def get_rag_service() -> RAGService:
+    return rag_service
