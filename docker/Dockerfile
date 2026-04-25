@@ -11,11 +11,9 @@ RUN apt-get update && apt-get install -y \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Pre-download embedding model so the container is self-contained
+# Pre-download embedding and reranker models so the container is self-contained
 RUN python -c "from fastembed import TextEmbedding; TextEmbedding(model_name='nomic-ai/nomic-embed-text-v1.5')"
-
-# Pre-download reranker model
-RUN python -c "from sentence_transformers import CrossEncoder; CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')"
+RUN python -c "from fastembed import CrossEncoder; CrossEncoder(model_name='mixedbread-ai/mxbai-rerank-large-v1')"
 
 COPY . .
 

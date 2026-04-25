@@ -1,5 +1,5 @@
-from typing import List, Union
-from fastembed import TextEmbedding
+from typing import List, Union, Dict
+from fastembed import TextEmbedding, CrossEncoder
 from app.core.config import settings
 import logging
 
@@ -7,9 +7,13 @@ logger = logging.getLogger(__name__)
 
 class EmbeddingService:
     def __init__(self):
-        # We use a very small model (all-MiniLM-L6-v2) to ensure it fits in Render's 512MB RAM
+        # Using high-quality Nomic model for local/Ubuntu hosting
         logger.info(f"Loading local embedding model: {settings.EMBEDDING_MODEL}")
         self.model = TextEmbedding(settings.EMBEDDING_MODEL)
+        
+        # Load the Reranker locally since we have enough RAM on Ubuntu
+        logger.info(f"Loading local reranker model: {settings.RERANKER_MODEL}")
+        self.reranker = CrossEncoder(settings.RERANKER_MODEL)
 
     def embed_query(self, query: str) -> List[float]:
         """Embed a single query for searching."""
@@ -20,6 +24,19 @@ class EmbeddingService:
         """Embed a batch of documents for storage."""
         res = list(self.model.embed(texts))
         return [vec.tolist() for vec in res]
+
+    def rerank(self, query: str, documents: List[str], top_k: int = 3) -> List[Dict]:
+        """
+        Rerank documents locally using CrossEncoder for maximum accuracy.
+        """
+        # CrossEncoder.rerank returns an iterator of results
+        results = list(self.reranker.rerank(query, documents))
+        
+        # Format for RAG service: list of {'index': int, 'score': float}
+        # Sort by score and take top_k
+        results.sort(key=lambda x: x.score, reverse=True)
+        
+        return [{"index": res.index, "score": float(res.score)} for res in results[:top_k]]
 
 # Singleton instance
 embedder = EmbeddingService()
