@@ -157,7 +157,7 @@ class RAGService:
         if not all_candidates:
             if error_msg:
                 return {"answer": f"System Error: {error_msg}", "sources": []}
-            return {"answer": "🛠️ [JARVIS DEBUG]: I am connected to your Ubuntu server, but my knowledge base search found 0 results for this query.", "sources": []}
+            return {"answer": "Sir, I have searched the knowledge base but found no relevant information regarding this query. Is there anything else I can assist you with?", "sources": []}
 
         print(f"[RAG] Reranking {len(all_candidates)} candidates...")
         # Reranking using Local CrossEncoder (High Accuracy)
