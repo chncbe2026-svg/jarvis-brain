@@ -1,5 +1,6 @@
 from typing import List, Union, Dict
-from fastembed import TextEmbedding, TextReranker
+from fastembed import TextEmbedding
+from fastembed.rerank.cross_encoder import TextCrossEncoder
 from app.core.config import settings
 import logging
 
@@ -13,7 +14,7 @@ class EmbeddingService:
         
         # Load the Reranker locally since we have enough RAM on Ubuntu
         logger.info(f"Loading local reranker model: {settings.RERANKER_MODEL}")
-        self.reranker = TextReranker(settings.RERANKER_MODEL)
+        self.reranker = TextCrossEncoder(settings.RERANKER_MODEL)
 
     def embed_query(self, query: str) -> List[float]:
         """Embed a single query for searching."""
@@ -27,9 +28,9 @@ class EmbeddingService:
 
     def rerank(self, query: str, documents: List[str], top_k: int = 3) -> List[Dict]:
         """
-        Rerank documents locally using TextReranker for maximum accuracy.
+        Rerank documents locally using TextCrossEncoder for maximum accuracy.
         """
-        # TextReranker.rerank returns an iterator of results
+        # TextCrossEncoder.rerank returns an iterator of results
         results = list(self.reranker.rerank(query, documents))
         
         # Format for RAG service: list of {'index': int, 'score': float}

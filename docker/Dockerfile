@@ -13,7 +13,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Pre-download embedding and reranker models so the container is self-contained
 RUN python -c "from fastembed import TextEmbedding; TextEmbedding(model_name='nomic-ai/nomic-embed-text-v1.5')"
-RUN python -c "from fastembed import TextReranker; TextReranker(model_name='mixedbread-ai/mxbai-rerank-large-v1')"
+RUN python -c "from fastembed.rerank.cross_encoder import TextCrossEncoder; TextCrossEncoder(model_name='mixedbread-ai/mxbai-rerank-large-v1')"
 
 COPY . .
 
