@@ -2,7 +2,7 @@ from pydantic_settings import BaseSettings
 from functools import lru_cache
 
 class Settings(BaseSettings):
-    GROQ_API_KEY: str
+    GROQ_API_KEY: str = ""
     MIXEDBREAD_API_KEY: str = ""
     
     QDRANT_HOST: str = "localhost"
