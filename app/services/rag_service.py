@@ -48,13 +48,14 @@ def hybrid_search(
     """
     # 1. Semantic Search
     query_vector = embedder.embed_query(query)
-    semantic_hits = qdrant.search(
+    search_response = qdrant.query_points(
         collection_name=collection,
-        query_vector=query_vector,
+        query=query_vector,
         query_filter=qdrant_filter,
         limit=top_k,
         with_payload=True,
     )
+    semantic_hits = search_response.points
 
     # 2. BM25 Search
     try:
