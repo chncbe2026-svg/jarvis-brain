@@ -1,22 +1,49 @@
-from fastembed import TextEmbedding
-from typing import List
-from app.core.config import get_settings
+from typing import List, Union
+from mixedbread_ai.client import MixedbreadAI
+from app.core.config import settings
+import logging
 
-settings = get_settings()
+logger = logging.getLogger(__name__)
 
 class EmbeddingService:
     def __init__(self):
-        # This will download the model on first use
-        self.model = TextEmbedding(model_name=settings.EMBEDDING_MODEL)
+        if not settings.MIXEDBREAD_API_KEY:
+            logger.warning("MIXEDBREAD_API_KEY not found! Embeddings will fail.")
+        
+        self.client = MixedbreadAI(api_key=settings.MIXEDBREAD_API_KEY)
+        self.model = settings.EMBEDDING_MODEL
 
-    def embed_text(self, text: str) -> List[float]:
-        embeddings = list(self.model.embed([text]))
-        return embeddings[0].tolist()
+    def embed_query(self, query: str) -> List[float]:
+        """Embed a single query for searching."""
+        res = self.client.embeddings(
+            model=self.model,
+            input=query,
+            normalized=True
+        )
+        return res.data[0].embedding
 
     def embed_batch(self, texts: List[str]) -> List[List[float]]:
-        return [e.tolist() for e in self.model.embed(texts)]
+        """Embed a batch of documents for storage."""
+        # Mixedbread handles batching automatically
+        res = self.client.embeddings(
+            model=self.model,
+            input=texts,
+            normalized=True
+        )
+        return [item.embedding for item in res.data]
 
-embedding_service = EmbeddingService()
+    def rerank(self, query: str, documents: List[str], top_k: int = 3) -> List[dict]:
+        """
+        Rerank a list of documents based on query relevance using Mixedbread API.
+        Returns list of {'index': int, 'score': float}
+        """
+        res = self.client.reranking(
+            model=settings.RERANKER_MODEL,
+            query=query,
+            input=documents,
+            top_n=top_k
+        )
+        return [{"index": item.index, "score": item.score} for item in res.data]
 
-def get_embedding_service():
-    return embedding_service
+# Singleton instance
+embedder = EmbeddingService()

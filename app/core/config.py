@@ -3,6 +3,8 @@ from functools import lru_cache
 
 class Settings(BaseSettings):
     GROQ_API_KEY: str
+    MIXEDBREAD_API_KEY: str = ""
+    
     QDRANT_HOST: str = "localhost"
     QDRANT_PORT: int = 6333
     QDRANT_URL: str = ""
@@ -12,9 +14,10 @@ class Settings(BaseSettings):
     COLLECTION_NETWORK: str = "network_knowledge"
     COLLECTION_VENDOR: str = "vendor_news"
     
-    EMBEDDING_MODEL: str = "nomic-ai/nomic-embed-text-v1.5"
-    GROQ_MODEL: str = "llama3-70b-8192"
-    RERANKER_MODEL: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    # We use Mixedbread for embeddings now
+    EMBEDDING_MODEL: str = "mixedbread-ai/mxbai-embed-large-v1"
+    GROQ_MODEL: str = "llama-3.3-70b-versatile"
+    RERANKER_MODEL: str = "mixedbread-ai/mxbai-rerank-large-v1"
     
     # RAG Pipeline tuning
     CHUNK_SIZE: int = 600        # in tokens
@@ -32,3 +35,5 @@ class Settings(BaseSettings):
 @lru_cache()
 def get_settings():
     return Settings()
+
+settings = get_settings()
