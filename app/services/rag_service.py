@@ -153,13 +153,9 @@ class RAGService:
         if not all_candidates:
             return {"answer": "Sir, I found no relevant information in the knowledge base.", "sources": []}
 
-        # Reranking using Mixedbread API
-        doc_texts = [c["payload"].get("text", "") for c in all_candidates]
-        rerank_results = embedder.rerank(user_query, doc_texts, settings.TOP_K_RERANK)
-        
-        final_docs = []
-        for res in rerank_results:
-            final_docs.append(all_candidates[res["index"]])
+        # We skip external API reranking to guarantee stability.
+        # Just use the top hits from Hybrid Search.
+        final_docs = all_candidates[:settings.TOP_K_RERANK]
 
         # Build context
         context_blocks = []

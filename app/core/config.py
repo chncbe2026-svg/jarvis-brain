@@ -14,10 +14,9 @@ class Settings(BaseSettings):
     COLLECTION_NETWORK: str = "network_knowledge"
     COLLECTION_VENDOR: str = "vendor_news"
     
-    # We use Mixedbread for embeddings now
-    EMBEDDING_MODEL: str = "mixedbread-ai/mxbai-embed-large-v1"
+    # We use a tiny local model to fit in 512MB RAM
+    EMBEDDING_MODEL: str = "sentence-transformers/all-MiniLM-L6-v2"
     GROQ_MODEL: str = "llama-3.3-70b-versatile"
-    RERANKER_MODEL: str = "mixedbread-ai/mxbai-rerank-large-v1"
     
     # RAG Pipeline tuning
     CHUNK_SIZE: int = 600        # in tokens

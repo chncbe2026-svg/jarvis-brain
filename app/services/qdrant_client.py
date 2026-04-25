@@ -25,21 +25,35 @@ def init_collections():
     ]
     
     try:
-        existing = [c.name for c in qdrant.get_collections().collections]
+        existing_colls = qdrant.get_collections().collections
+        existing = {c.name: c for c in existing_colls}
     except Exception as e:
         print(f"[Qdrant] Error getting collections: {e}")
-        existing = []
+        existing = {}
     
     for coll in collections:
         if coll not in existing:
             qdrant.create_collection(
                 collection_name=coll,
                 vectors_config=models.VectorParams(
-                    size=1024,  # mxbai-embed-large-v1 size
+                    size=384,  # all-MiniLM-L6-v2 size
                     distance=models.Distance.COSINE
                 )
             )
             print(f"[Qdrant] Created collection: {coll}")
+        else:
+            # If the collection exists but has wrong dimensions, recreate it
+            info = qdrant.get_collection(coll)
+            if info.config.params.vectors.size != 384:
+                print(f"[Qdrant] Recreating {coll} due to dimension mismatch...")
+                qdrant.delete_collection(coll)
+                qdrant.create_collection(
+                    collection_name=coll,
+                    vectors_config=models.VectorParams(
+                        size=384,
+                        distance=models.Distance.COSINE
+                    )
+                )
 
 def get_qdrant_client():
     return qdrant
