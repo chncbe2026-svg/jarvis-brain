@@ -46,6 +46,7 @@ def hybrid_search(
     """
     Combines Semantic (Dense) search and BM25 (Keyword) search.
     """
+    print(f"[RAG] Hybrid Search in {collection} for: {query}")
     # 1. Semantic Search
     query_vector = embedder.embed_query(query)
     search_response = qdrant.query_points(
@@ -56,6 +57,7 @@ def hybrid_search(
         with_payload=True,
     )
     semantic_hits = search_response.points
+    print(f"[RAG] Semantic Hits: {len(semantic_hits)}")
 
     # 2. BM25 Search
     try:
@@ -65,7 +67,8 @@ def hybrid_search(
             limit=200,
             with_payload=True,
         )
-    except Exception:
+    except Exception as e:
+        print(f"[RAG] Scroll failed: {e}")
         scroll_results = []
 
     docs = [r.payload.get("text", "") for r in scroll_results]
@@ -77,12 +80,12 @@ def hybrid_search(
         bm25 = BM25Okapi(tokenized)
         scores = bm25.get_scores(query.lower().split())
         bm25_scores = {doc_ids[i]: float(scores[i]) for i in range(len(doc_ids))}
+        print(f"[RAG] BM25 found {len(docs)} docs to rank")
 
     # 3. Fuse Results (Simple Linear Combination)
     sem_map = {str(hit.id): hit.score for hit in semantic_hits}
     sem_payloads = {str(hit.id): hit.payload for hit in semantic_hits}
     
-    # Reciprocal Rank Fusion or simple weighted sum
     alpha = settings.HYBRID_ALPHA
     combined = []
     all_ids = set(sem_map.keys()) | set(bm25_scores.keys())
@@ -90,14 +93,10 @@ def hybrid_search(
     for doc_id in all_ids:
         s_score = sem_map.get(doc_id, 0.0)
         b_score = bm25_scores.get(doc_id, 0.0)
-        
-        # Normalise scores (rough)
         fused_score = (alpha * s_score) + ((1 - alpha) * (b_score / 10.0))
         
-        # Get payload
         payload = sem_payloads.get(doc_id)
         if not payload:
-            # Try to find in scroll results
             for r in scroll_results:
                 if str(r.id) == doc_id:
                     payload = r.payload
@@ -107,6 +106,7 @@ def hybrid_search(
             combined.append({"id": doc_id, "score": fused_score, "payload": payload})
 
     combined.sort(key=lambda x: x["score"], reverse=True)
+    print(f"[RAG] Fused Results: {len(combined)}")
     return combined[:top_k]
 
 class RAGService:
@@ -135,6 +135,7 @@ class RAGService:
         collection: Optional[str] = None,
         filters: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
+        print(f"[RAG] Processing Query: {user_query}")
         target_collections = [collection] if collection else [
             settings.COLLECTION_PERSONAL,
             settings.COLLECTION_NETWORK,
@@ -150,7 +151,7 @@ class RAGService:
                 hits = hybrid_search(user_query, coll, settings.TOP_K_RETRIEVE, qdrant_filter)
                 all_candidates.extend(hits)
             except Exception as e:
-                logger.warning(f"Search failed in {coll}: {e}")
+                print(f"[RAG] SEARCH ERROR in {coll}: {e}")
                 error_msg = str(e)
 
         if not all_candidates:
@@ -158,6 +159,7 @@ class RAGService:
                 return {"answer": f"System Error: {error_msg}", "sources": []}
             return {"answer": "Sir, I found no relevant information in the knowledge base.", "sources": []}
 
+        print(f"[RAG] Reranking {len(all_candidates)} candidates...")
         # Reranking using Local CrossEncoder (High Accuracy)
         doc_texts = [c["payload"].get("text", "") for c in all_candidates]
         rerank_results = embedder.rerank(user_query, doc_texts, settings.TOP_K_RERANK)
@@ -166,6 +168,7 @@ class RAGService:
         for res in rerank_results:
             final_docs.append(all_candidates[res["index"]])
 
+        print(f"[RAG] Final docs selected: {len(final_docs)}")
         # Build context
         context_blocks = []
         sources = []
@@ -187,13 +190,18 @@ If the CONTEXT is irrelevant, use your general knowledge but mention you are doi
 
         user_prompt = f"CONTEXT:\n{context_str}\n\nQUESTION:\n{user_query}"
 
-        response = groq_client.chat.completions.create(
-            model=settings.GROQ_MODEL,
-            messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
-            temperature=0.1
-        )
-
-        return {"answer": response.choices[0].message.content, "sources": sources}
+        print(f"[RAG] Sending to Groq...")
+        try:
+            response = groq_client.chat.completions.create(
+                model=settings.GROQ_MODEL,
+                messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
+                temperature=0.1
+            )
+            print(f"[RAG] Groq Success!")
+            return {"answer": response.choices[0].message.content, "sources": sources}
+        except Exception as e:
+            print(f"[RAG] GROQ ERROR: {e}")
+            return {"answer": f"Sir, I encountered an error while communicating with Groq: {e}", "sources": sources}
 
 rag_service = RAGService()
 
