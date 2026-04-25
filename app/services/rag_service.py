@@ -144,14 +144,18 @@ class RAGService:
         qdrant_filter = build_filter(filters)
         all_candidates = []
 
+        error_msg = None
         for coll in target_collections:
             try:
                 hits = hybrid_search(user_query, coll, settings.TOP_K_RETRIEVE, qdrant_filter)
                 all_candidates.extend(hits)
             except Exception as e:
                 logger.warning(f"Search failed in {coll}: {e}")
+                error_msg = str(e)
 
         if not all_candidates:
+            if error_msg:
+                return {"answer": f"System Error: {error_msg}", "sources": []}
             return {"answer": "Sir, I found no relevant information in the knowledge base.", "sources": []}
 
         # Reranking using Local CrossEncoder (High Accuracy)
