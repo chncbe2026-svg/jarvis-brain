@@ -136,6 +136,47 @@ class RAGService:
         filters: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         print(f"[RAG] Processing Query: {user_query}")
+        
+        # ─── AUTO-LEARNING LOGIC ───
+        # Clean the query (remove "JARVIS, " prefix)
+        clean_query = user_query.lower().strip()
+        if clean_query.startswith("jarvis"):
+            clean_query = clean_query.replace("jarvis", "", 1).strip().lstrip(",").strip()
+            
+        if any(word in clean_query for word in ["learn", "remember", "memorize", "note down"]):
+            print(f"[RAG] Learning intent detected. Ingesting to personal memory...")
+            try:
+                # Strip the "learn" keyword and store the core fact
+                fact = clean_query
+                for word in ["learn that", "learn", "remember that", "remember", "memorize", "note down"]:
+                    if clean_query.startswith(word):
+                        fact = clean_query[len(word):].strip()
+                        break
+                
+                # Use original case for the stored fact if possible
+                original_fact = user_query
+                if clean_query in user_query.lower():
+                    # Try to find the cleaned part in original text to preserve case
+                    start_idx = user_query.lower().find(fact)
+                    if start_idx != -1:
+                        original_fact = user_query[start_idx:].strip()
+                else:
+                    original_fact = fact # Fallback to cleaned lowercase
+                
+                metadata = {
+                    "source": "manual_voice_learning",
+                    "type": "personal_memory",
+                    "timestamp": str(uuid.uuid4())
+                }
+                await self.ingest_text(original_fact, metadata, settings.COLLECTION_PERSONAL)
+                
+                return {
+                    "answer": f"Sir, I've successfully committed that to my central knowledge base. I will remember that: \"{original_fact}\"",
+                    "sources": []
+                }
+            except Exception as e:
+                print(f"[RAG] Learning failed: {e}")
+
         target_collections = [collection] if collection else [
             settings.COLLECTION_PERSONAL,
             settings.COLLECTION_NETWORK,

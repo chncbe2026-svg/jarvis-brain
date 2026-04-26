@@ -37,7 +37,7 @@ try {
 
 # 2. Start FastAPI
 Write-Host ""
-Write-Host "[2/2] Starting Jarvis FastAPI backend on port 3001..." -ForegroundColor Yellow
+Write-Host "[2/2] Starting Jarvis FastAPI backend on port 10000..." -ForegroundColor Yellow
 Write-Host "      (First run downloads embedding models - may take 2-3 minutes)" -ForegroundColor DarkYellow
 Write-Host ""
 
@@ -49,7 +49,7 @@ if (-Not (Test-Path $pythonExe)) {
 }
 
 $apiProc = Start-Process -FilePath $pythonExe `
-    -ArgumentList "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "3001", "--reload" `
+    -ArgumentList "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "10000", "--reload" `
     -WindowStyle Normal `
     -PassThru
 
@@ -58,9 +58,9 @@ Write-Host "  Services Started!" -ForegroundColor Green
 Write-Host "=====================================================" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "  Qdrant Dashboard : http://localhost:6333/dashboard"
-Write-Host "  Jarvis API       : http://localhost:3001"
-Write-Host "  API Docs         : http://localhost:3001/docs"
-Write-Host "  Health Check     : http://localhost:3001/health"
+Write-Host "  Jarvis API       : http://localhost:10000"
+Write-Host "  API Docs         : http://localhost:10000/docs"
+Write-Host "  Health Check     : http://localhost:10000/health"
 Write-Host ""
 Write-Host "  Press Ctrl+C to stop" -ForegroundColor DarkGray
 Write-Host ""
