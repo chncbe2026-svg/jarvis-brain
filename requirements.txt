@@ -12,3 +12,4 @@ requests>=2.31.0
 python-dotenv>=1.0.1
 rank-bm25>=0.2.2
 APScheduler>=3.10.4
+asyncssh>=2.14.2

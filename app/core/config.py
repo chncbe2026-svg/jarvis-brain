@@ -29,6 +29,13 @@ class Settings(BaseSettings):
     # Scheduling
     RSS_SYNC_INTERVAL_MINS: int = 30
 
+    # SSH Settings
+    SSH_HOST: str = "172.17.0.1"
+    SSH_PORT: int = 22
+    SSH_USER: str = "root"
+    SSH_PASSWORD: str = ""
+    SSH_PRIVATE_KEY: str = ""
+
     class Config:
         env_file = ".env"
 

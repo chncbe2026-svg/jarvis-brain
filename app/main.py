@@ -3,10 +3,11 @@ import logging
 from contextlib import asynccontextmanager
 from typing import Optional, Dict, Any
 
-from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks
+from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+import asyncssh
 
 from app.services.rag_service import get_rag_service
 from app.services.rss_service import get_rss_service
@@ -219,6 +220,60 @@ async def manual_rss_sync():
 async def health():
     return {"status": "healthy", "groq_model": settings.GROQ_MODEL}
 
+
+@app.websocket("/api/ssh")
+async def websocket_ssh(websocket: WebSocket):
+    await websocket.accept()
+    
+    host = settings.SSH_HOST
+    port = settings.SSH_PORT
+    user = settings.SSH_USER
+    password = settings.SSH_PASSWORD
+    private_key_path = settings.SSH_PRIVATE_KEY
+    
+    connect_kwargs = {
+        "host": host,
+        "port": port,
+        "username": user,
+        "known_hosts": None  # Bypass strict host key checking
+    }
+    
+    if password:
+        connect_kwargs["password"] = password
+    elif private_key_path:
+        connect_kwargs["client_keys"] = [private_key_path]
+        
+    try:
+        async with asyncssh.connect(**connect_kwargs) as conn:
+            async with conn.create_process(term_type='xterm', encoding='utf-8') as process:
+                await websocket.send_text('\r\n\x1b[32m*** Connected to JARVIS Brain via Python Tunnel ***\x1b[0m\r\n\r\n')
+                
+                async def read_from_ws():
+                    try:
+                        while True:
+                            data = await websocket.receive_text()
+                            process.stdin.write(data)
+                    except WebSocketDisconnect:
+                        pass
+                        
+                async def read_from_ssh():
+                    try:
+                        while not process.stdout.at_eof():
+                            data = await process.stdout.read(4096)
+                            if data:
+                                await websocket.send_text(data)
+                    except Exception as e:
+                        logger.error(f"SSH Read Error: {e}")
+                        
+                await asyncio.gather(read_from_ws(), read_from_ssh())
+                
+    except Exception as e:
+        logger.error(f"SSH Connection Failed: {e}")
+        try:
+            await websocket.send_text(f"\r\n\x1b[31m*** SSH Failed: {str(e)} ***\x1b[0m\r\n")
+            await websocket.close()
+        except:
+            pass
 
 # ─── Helpers ────────────────────────────────────────────────────────────────────
 
