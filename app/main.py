@@ -264,44 +264,39 @@ async def websocket_ssh(websocket: WebSocket):
             logger.info("[SSH] Attempting websocket tunnel to %s@%s:%s via %s", user, host, port, auth_mode)
             logger.info(f"[SSH] Connecting to {host}:{port} as {user}...")
             async with asyncssh.connect(**connect_kwargs) as conn:
-                async with conn.create_shell(
+                # Explicitly request /bin/bash -i for a guaranteed interactive prompt
+                async with conn.create_process(
+                    '/bin/bash -i',
                     term_type='xterm',
                     term_size=(100, 30),
-                    encoding='utf-8'
+                    encoding='utf-8',
+                    stderr=asyncssh.STDOUT
                 ) as process:
-                    logger.info("[SSH] Shell started successfully")
-                    await websocket.send_text('\r\n\x1b[32m*** Shell Session Started ***\x1b[0m\r\n\r\n')
+                    logger.info("[SSH] Interactive bash shell started")
+                    await websocket.send_text('\r\n\x1b[32m*** Secure Shell Channel Open ***\x1b[0m\r\n\r\n')
                     
-                    # Give the shell a tiny moment to print the prompt
-                    await asyncio.sleep(0.1)
+                    # Wait for the shell to initialize and send the motd/prompt
+                    await asyncio.sleep(0.2)
 
                     async def read_from_ws():
                         try:
                             while True:
                                 data = await websocket.receive_text()
                                 if data:
-                                    # logger.info(f"[SSH] WS -> SSH: {repr(data)}")
                                     process.stdin.write(data)
                                     await process.stdin.drain()
+                        except (WebSocketDisconnect, ConnectionError):
+                            pass
                         except Exception as e:
-                            logger.error(f"[SSH] WS Read Error: {e}")
+                            logger.error(f"[SSH] WS -> SSH Error: {e}")
 
                     async def read_from_ssh():
                         try:
                             while not process.stdout.at_eof():
-                                data = await process.stdout.read(4096)
+                                # Use a smaller chunk size for better responsiveness
+                                data = await process.stdout.read(1024)
                                 if data:
                                     await websocket.send_text(data)
-                        except Exception as exc:
-                            logger.error("SSH stream read failed: %s", exc)
-
-                    ws_task = asyncio.create_task(read_from_ws())
-                    ssh_task = asyncio.create_task(read_from_ssh())
-                    done, pending = await asyncio.wait(
-                        {ws_task, ssh_task},
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-
                     for task in pending:
                         task.cancel()
                     await asyncio.gather(*pending, return_exceptions=True)
