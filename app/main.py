@@ -221,6 +221,8 @@ async def health():
     return {"status": "healthy", "groq_model": settings.GROQ_MODEL}
 
 
+import os
+
 @app.websocket("/api/ssh")
 async def websocket_ssh(websocket: WebSocket):
     await websocket.accept()
@@ -235,13 +237,19 @@ async def websocket_ssh(websocket: WebSocket):
         "host": host,
         "port": port,
         "username": user,
-        "known_hosts": None  # Bypass strict host key checking
+        "known_hosts": None,
+        "agent_path": None  # Disable agent to avoid interference
     }
     
-    if password:
-        connect_kwargs["password"] = password
-    elif private_key_path:
+    # Prioritize Key Authentication
+    if private_key_path and os.path.exists(private_key_path):
+        logger.info(f"[SSH] Using private key at {private_key_path}")
         connect_kwargs["client_keys"] = [private_key_path]
+    
+    # Add password as fallback if provided
+    if password:
+        logger.info(f"[SSH] Using password authentication for {user}")
+        connect_kwargs["password"] = password
         
     try:
         async with asyncssh.connect(**connect_kwargs) as conn:
