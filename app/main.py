@@ -264,34 +264,27 @@ async def websocket_ssh(websocket: WebSocket):
             logger.info("[SSH] Attempting websocket tunnel to %s@%s:%s via %s", user, host, port, auth_mode)
             logger.info(f"[SSH] Connecting to {host}:{port} as {user}...")
             async with asyncssh.connect(**connect_kwargs) as conn:
-                logger.info("[SSH] Connection established, creating process...")
-                async with conn.create_process(
+                async with conn.create_shell(
                     term_type='xterm',
                     term_size=(100, 30),
-                    encoding='utf-8',
-                    stderr=asyncssh.STDOUT,
+                    encoding='utf-8'
                 ) as process:
-                    logger.info("[SSH] Shell process started")
-                    await websocket.send_text(
-                        f"\r\n\x1b[32m*** Connected to JARVIS Brain via Python Tunnel ({host}) ***\x1b[0m\r\n\r\n"
-                    )
+                    logger.info("[SSH] Shell started successfully")
+                    await websocket.send_text('\r\n\x1b[32m*** Shell Session Started ***\x1b[0m\r\n\r\n')
+                    
+                    # Give the shell a tiny moment to print the prompt
+                    await asyncio.sleep(0.1)
 
                     async def read_from_ws():
                         try:
                             while True:
                                 data = await websocket.receive_text()
-                                logger.info(f"[SSH] Received {len(data)} chars: {data[:10]}")
-                                process.stdin.write(data)
-                                await process.stdin.drain()
-                        except WebSocketDisconnect:
-                            logger.info("[SSH] WebSocket disconnected")
-                        except Exception as exc:
-                            logger.error("WebSocket receive failed: %s", exc)
-                        finally:
-                            try:
-                                process.stdin.write_eof()
-                            except Exception:
-                                pass
+                                if data:
+                                    # logger.info(f"[SSH] WS -> SSH: {repr(data)}")
+                                    process.stdin.write(data)
+                                    await process.stdin.drain()
+                        except Exception as e:
+                            logger.error(f"[SSH] WS Read Error: {e}")
 
                     async def read_from_ssh():
                         try:

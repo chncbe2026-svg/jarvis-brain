@@ -30,3 +30,6 @@ services:
 volumes:
   qdrant_data:
   fastembed_cache:
+
+environment:
+  HF_HUB_OFFLINE: 1
