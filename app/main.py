@@ -195,7 +195,6 @@ async def ingest_document(
         content = (await file.read()).decode("utf-8")
         filename = file.filename
 
-    if not content:
         return {"status": "error", "detail": "No content provided."}
 
     metadata = {
@@ -224,126 +223,123 @@ async def health():
 
 @app.websocket("/api/ssh")
 async def websocket_ssh(websocket: WebSocket):
-    """
-    Opens a real interactive terminal inside this container.
-    Uses a PTY so arrow keys, tab completion, colors all work.
-    """
+    import asyncio
+    import json
+    import os
+    import asyncssh
+    from fastapi import WebSocketDisconnect
+
     await websocket.accept()
-    logger.info("[TERM] New terminal session")
-
-    import pty as pty_module
-    import struct
-    import fcntl
-    import termios
-    import errno
-
-    master_fd, slave_fd = pty_module.openpty()
-
-    # Set terminal size (rows=30, cols=120)
-    winsize = struct.pack("HHHH", 30, 120, 0, 0)
-    fcntl.ioctl(slave_fd, termios.TIOCSWINSZ, winsize)
-
-    # Set master_fd to non-blocking
-    flags = fcntl.fcntl(master_fd, fcntl.F_GETFL)
-    fcntl.fcntl(master_fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
-
-    # Spawn a real bash shell (or ssh if configured)
-    host = (settings.SSH_HOST or "").strip()
-    password = (settings.SSH_PASSWORD or "").strip()
-    key_path = (settings.SSH_PRIVATE_KEY or "").strip()
-    user = (settings.SSH_USER or "root").strip()
-    port = settings.SSH_PORT
-
-    # Build command: try SSH if host is set, otherwise local bash
-    if host:
-        cmd = ["ssh", "-tt",
-               "-o", "StrictHostKeyChecking=no",
-               "-o", "UserKnownHostsFile=/dev/null",
-               "-p", str(port)]
-        if key_path and os.path.exists(key_path):
-            cmd += ["-i", key_path]
-        cmd.append(f"{user}@{host}")
-        # Wrap with sshpass if password set and no key
-        if password and not (key_path and os.path.exists(key_path)):
-            cmd = ["sshpass", "-p", password] + cmd
-        logger.info("[TERM] SSH mode: %s@%s:%s", user, host, port)
-    else:
-        cmd = ["/bin/bash"]
-        logger.info("[TERM] Local shell mode")
-
-    process = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdin=slave_fd,
-        stdout=slave_fd,
-        stderr=slave_fd,
-        env={**os.environ, "TERM": "xterm", "COLUMNS": "120", "LINES": "30"},
-    )
-
-    os.close(slave_fd)
-
-    loop = asyncio.get_running_loop()
-    logger.info("[TERM] Process started pid=%s cmd=%s", process.pid, cmd[0])
-
-    # ── PTY → WebSocket (event-driven, zero latency) ──
-    async def pty_to_ws():
-        queue: asyncio.Queue = asyncio.Queue()
-
-        def _readable():
-            try:
-                data = os.read(master_fd, 4096)
-                queue.put_nowait(data if data else None)
-            except OSError:
-                queue.put_nowait(None)
-
-        loop.add_reader(master_fd, _readable)
-        try:
-            while True:
-                chunk = await queue.get()
-                if chunk is None:
-                    break
-                await websocket.send_text(chunk.decode("utf-8", errors="replace"))
-        except (WebSocketDisconnect, ConnectionError, asyncio.CancelledError):
-            pass
-        except Exception as e:
-            logger.error("[TERM] pty→ws: %s", e)
-        finally:
-            try:
-                loop.remove_reader(master_fd)
-            except Exception:
-                pass
-
-    # ── WebSocket → PTY ──
-    async def ws_to_pty():
-        try:
-            async for msg in websocket.iter_text():
-                os.write(master_fd, msg.encode("utf-8"))
-        except (WebSocketDisconnect, ConnectionError, asyncio.CancelledError):
-            pass
-        except OSError:
-            pass
-        except Exception as e:
-            logger.error("[TERM] ws→pty: %s", e)
-
-    t1 = asyncio.create_task(pty_to_ws())
-    t2 = asyncio.create_task(ws_to_pty())
-
-    done, pending = await asyncio.wait([t1, t2], return_when=asyncio.FIRST_COMPLETED)
-    for t in pending:
-        t.cancel()
-    await asyncio.gather(*pending, return_exceptions=True)
-
-    if process.returncode is None:
-        try:
-            process.kill()
-        except ProcessLookupError:
-            pass
+    logger.info("[SSH] Starting browser terminal session")
 
     try:
-        os.close(master_fd)
-    except OSError:
-        pass
+        key_path = (settings.SSH_PRIVATE_KEY or "").strip()
+        client_keys = [key_path] if key_path and os.path.isfile(key_path) else None
 
-    logger.info("[TERM] Session ended exit=%s", process.returncode)
+        conn = await asyncssh.connect(
+            host=settings.SSH_HOST,
+            port=settings.SSH_PORT,
+            username=settings.SSH_USER,
+            password=settings.SSH_PASSWORD or None,
+            client_keys=client_keys,
+            known_hosts=None
+        )
+
+        logger.info("[SSH] Connected")
+
+        # IMPORTANT: let remote login shell start naturally
+        process = await conn.create_process(
+            term_type="xterm",
+            term_size=(120, 30)
+        )
+
+        await websocket.send_text(
+            "\r\n\x1b[32m*** Secure Shell Channel Open ***\x1b[0m\r\n"
+        )
+
+        # Nudge prompt to render
+        process.stdin.write("\n")
+
+        # -------- SSH -> Browser --------
+        async def ssh_to_ws():
+            try:
+                while True:
+                    chunk = await process.stdout.read(1024)
+                    if not chunk:
+                        break
+                    await websocket.send_text(chunk)
+
+            except asyncio.CancelledError:
+                pass
+            except Exception as e:
+                logger.error(f"[SSH OUT ERROR] {e}")
+
+        # -------- Browser -> SSH --------
+        async def ws_to_ssh():
+            try:
+                async for msg in websocket.iter_text():
+
+                    # resize control packet
+                    if msg.startswith("{"):
+                        try:
+                            ctrl = json.loads(msg)
+
+                            if ctrl.get("type") == "resize":
+                                process.change_terminal_size(
+                                    int(ctrl["cols"]),
+                                    int(ctrl["rows"])
+                                )
+                                continue
+
+                        except Exception:
+                            pass
+
+                    # raw keyboard input
+                    process.stdin.write(msg)
+
+            except WebSocketDisconnect:
+                pass
+            except asyncio.CancelledError:
+                pass
+            except Exception as e:
+                logger.error(f"[SSH IN ERROR] {e}")
+
+        t1 = asyncio.create_task(ssh_to_ws())
+        t2 = asyncio.create_task(ws_to_ssh())
+
+        done, pending = await asyncio.wait(
+            [t1, t2],
+            return_when=asyncio.FIRST_COMPLETED
+        )
+
+        for t in pending:
+            t.cancel()
+
+        await asyncio.gather(*pending, return_exceptions=True)
+
+        try:
+            process.terminate()
+        except:
+            pass
+
+        conn.close()
+        logger.info("[SSH] Session closed")
+
+    except Exception as e:
+        logger.exception("[SSH FATAL]")
+
+        try:
+            await websocket.send_text(
+                f"\r\n\x1b[31mSSH Failed: {e}\x1b[0m\r\n"
+            )
+        except:
+            pass
+
+        try:
+            await websocket.close()
+        except:
+            pass
+
 
 # ─── Helpers ────────────────────────────────────────────────────────────────────
 
