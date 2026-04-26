@@ -20,7 +20,7 @@ services:
       - "3001:8000"
 
     environment:
-      HF_HUB_OFFLINE: "1"
+      HF_HUB_OFFLINE: "0"
 
     env_file:
       - ../.env
