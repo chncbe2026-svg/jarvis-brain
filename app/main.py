@@ -278,6 +278,7 @@ async def websocket_ssh(websocket: WebSocket):
                                 data = await websocket.receive_text()
                                 logger.info(f"[SSH] Received {len(data)} chars: {data[:10]}")
                                 process.stdin.write(data)
+                                await process.stdin.drain()
                         except WebSocketDisconnect:
                             logger.info("[SSH] WebSocket disconnected")
                         except Exception as exc:
