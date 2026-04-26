@@ -262,12 +262,16 @@ async def websocket_ssh(websocket: WebSocket):
 
         try:
             logger.info("[SSH] Attempting websocket tunnel to %s@%s:%s via %s", user, host, port, auth_mode)
+            logger.info(f"[SSH] Connecting to {host}:{port} as {user}...")
             async with asyncssh.connect(**connect_kwargs) as conn:
+                logger.info("[SSH] Connection established, creating process...")
                 async with conn.create_process(
-                    term_type="xterm",
-                    encoding="utf-8",
+                    term_type='xterm',
+                    term_size=(100, 30),
+                    encoding='utf-8',
                     stderr=asyncssh.STDOUT,
                 ) as process:
+                    logger.info("[SSH] Shell process started")
                     await websocket.send_text(
                         f"\r\n\x1b[32m*** Connected to JARVIS Brain via Python Tunnel ({host}) ***\x1b[0m\r\n\r\n"
                     )
