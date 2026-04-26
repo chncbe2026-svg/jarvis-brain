@@ -267,9 +267,14 @@ async def websocket_ssh(websocket: WebSocket):
 
     master_fd, slave_fd = pty_module.openpty()
 
-    # Set terminal size
+    # Set terminal size on the slave
     winsize = struct.pack("HHHH", 30, 120, 0, 0)
     fcntl.ioctl(slave_fd, termios.TIOCSWINSZ, winsize)
+
+    # Set master_fd to non-blocking
+    import errno
+    flags = fcntl.fcntl(master_fd, fcntl.F_GETFL)
+    fcntl.fcntl(master_fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
 
     process = await asyncio.create_subprocess_exec(
         *ssh_cmd,
@@ -278,40 +283,46 @@ async def websocket_ssh(websocket: WebSocket):
         stderr=slave_fd,
     )
 
-    os.close(slave_fd)  # Only the master end is used from here
+    os.close(slave_fd)  # Parent only uses master end
 
-    # Make master_fd non-blocking for asyncio
-    import select
-
-    loop = asyncio.get_event_loop()
-
+    loop = asyncio.get_running_loop()
     logger.info("[SSH] PTY process started (pid=%s)", process.pid)
 
+    # ── PTY → WebSocket using loop.add_reader (zero-latency) ──
     async def pty_to_ws():
-        """Read from PTY master fd and forward to WebSocket."""
+        """Use asyncio event loop to be notified when PTY has data."""
+        queue = asyncio.Queue()
+
+        def on_pty_readable():
+            try:
+                data = os.read(master_fd, 4096)
+                if data:
+                    queue.put_nowait(data)
+                else:
+                    queue.put_nowait(None)  # EOF
+            except OSError as e:
+                if e.errno != errno.EIO:
+                    logger.error("[SSH] PTY read OSError: %s", e)
+                queue.put_nowait(None)
+
+        loop.add_reader(master_fd, on_pty_readable)
         try:
-            while process.returncode is None:
-                # Wait for data on the master fd
-                await asyncio.sleep(0.01)  # tiny yield to event loop
-                r, _, _ = select.select([master_fd], [], [], 0)
-                if r:
-                    try:
-                        data = os.read(master_fd, 4096)
-                        if data:
-                            await websocket.send_text(data.decode("utf-8", errors="replace"))
-                        else:
-                            break  # EOF
-                    except OSError:
-                        break
+            while True:
+                data = await queue.get()
+                if data is None:
+                    break
+                await websocket.send_text(data.decode("utf-8", errors="replace"))
         except (WebSocketDisconnect, ConnectionError):
             pass
         except asyncio.CancelledError:
             pass
         except Exception as e:
             logger.error("[SSH] pty→ws error: %s", e)
+        finally:
+            loop.remove_reader(master_fd)
 
+    # ── WebSocket → PTY ──
     async def ws_to_pty():
-        """Read from WebSocket and write to PTY master fd."""
         try:
             async for msg in websocket.iter_text():
                 try:
@@ -332,12 +343,11 @@ async def websocket_ssh(websocket: WebSocket):
         [t1, t2], return_when=asyncio.FIRST_COMPLETED
     )
 
-    # Cleanup
     for t in pending:
         t.cancel()
     await asyncio.gather(*pending, return_exceptions=True)
 
-    # Kill the SSH process if still running
+    # Kill SSH process if still running
     if process.returncode is None:
         try:
             process.kill()
