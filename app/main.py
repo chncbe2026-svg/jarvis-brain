@@ -224,102 +224,132 @@ async def health():
 
 @app.websocket("/api/ssh")
 async def websocket_ssh(websocket: WebSocket):
+    """
+    WebSocket-to-SSH bridge using a real PTY + system ssh client.
+    This guarantees a fully interactive terminal with proper escape
+    sequences, arrow keys, tab completion, etc.
+    """
     await websocket.accept()
 
+    host = (settings.SSH_HOST or "").strip()
     port = settings.SSH_PORT
-    user = (settings.SSH_USER or "").strip()
+    user = (settings.SSH_USER or "root").strip()
     password = (settings.SSH_PASSWORD or "").strip()
-    private_key_path = (settings.SSH_PRIVATE_KEY or "").strip()
-    hosts_to_try = _candidate_ssh_hosts((settings.SSH_HOST or "").strip())
+    key_path = (settings.SSH_PRIVATE_KEY or "").strip()
 
-    # Determine auth mode
-    if private_key_path and os.path.exists(private_key_path):
-        auth_mode = "key"
-    elif password:
-        auth_mode = "password"
-    else:
-        await websocket.send_text(
-            "\r\n\x1b[31m*** SSH Failed: No credentials configured ***\x1b[0m\r\n"
-        )
+    if not host:
+        await websocket.send_text("\r\n\x1b[31m*** SSH_HOST not configured ***\x1b[0m\r\n")
         await websocket.close(code=1011)
         return
 
-    errors = []
+    # Build the ssh command
+    ssh_cmd = ["ssh", "-tt",
+               "-o", "StrictHostKeyChecking=no",
+               "-o", "UserKnownHostsFile=/dev/null",
+               "-p", str(port)]
 
-    for host in hosts_to_try:
-        kw = {
-            "host": host,
-            "port": port,
-            "username": user,
-            "known_hosts": None,
-            "agent_path": None,
-        }
-        if auth_mode == "key":
-            kw["client_keys"] = [private_key_path]
-        else:
-            kw["password"] = password
+    if key_path and os.path.exists(key_path):
+        ssh_cmd += ["-i", key_path]
 
+    ssh_cmd.append(f"{user}@{host}")
+
+    # If password is set and no key, wrap with sshpass
+    if password and not (key_path and os.path.exists(key_path)):
+        ssh_cmd = ["sshpass", "-p", password] + ssh_cmd
+
+    logger.info("[SSH] Spawning: %s", " ".join(ssh_cmd).replace(password, "***") if password else " ".join(ssh_cmd))
+
+    # Open a real pseudo-terminal
+    import pty as pty_module
+    import struct
+    import fcntl
+    import termios
+
+    master_fd, slave_fd = pty_module.openpty()
+
+    # Set terminal size
+    winsize = struct.pack("HHHH", 30, 120, 0, 0)
+    fcntl.ioctl(slave_fd, termios.TIOCSWINSZ, winsize)
+
+    process = await asyncio.create_subprocess_exec(
+        *ssh_cmd,
+        stdin=slave_fd,
+        stdout=slave_fd,
+        stderr=slave_fd,
+    )
+
+    os.close(slave_fd)  # Only the master end is used from here
+
+    # Make master_fd non-blocking for asyncio
+    import select
+
+    loop = asyncio.get_event_loop()
+
+    logger.info("[SSH] PTY process started (pid=%s)", process.pid)
+
+    async def pty_to_ws():
+        """Read from PTY master fd and forward to WebSocket."""
         try:
-            logger.info("[SSH] Trying %s@%s:%s (%s)", user, host, port, auth_mode)
-            async with asyncssh.connect(**kw) as conn:
-                # Open a real interactive shell with a PTY
-                async with conn.create_process(
-                    term_type="xterm",
-                    term_size=(120, 30),
-                ) as proc:
-                    logger.info("[SSH] Shell opened on %s", host)
+            while process.returncode is None:
+                # Wait for data on the master fd
+                await asyncio.sleep(0.01)  # tiny yield to event loop
+                r, _, _ = select.select([master_fd], [], [], 0)
+                if r:
+                    try:
+                        data = os.read(master_fd, 4096)
+                        if data:
+                            await websocket.send_text(data.decode("utf-8", errors="replace"))
+                        else:
+                            break  # EOF
+                    except OSError:
+                        break
+        except (WebSocketDisconnect, ConnectionError):
+            pass
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.error("[SSH] pty→ws error: %s", e)
 
-                    # ── stdout → websocket (async iterator — yields immediately) ──
-                    async def ssh_to_ws():
-                        try:
-                            async for data in proc.stdout:
-                                if isinstance(data, bytes):
-                                    await websocket.send_text(data.decode("utf-8", errors="replace"))
-                                else:
-                                    await websocket.send_text(data)
-                        except (WebSocketDisconnect, ConnectionError):
-                            pass
-                        except asyncio.CancelledError:
-                            pass
-                        except Exception as e:
-                            logger.error("[SSH] ssh→ws error: %s", e)
+    async def ws_to_pty():
+        """Read from WebSocket and write to PTY master fd."""
+        try:
+            async for msg in websocket.iter_text():
+                try:
+                    os.write(master_fd, msg.encode("utf-8"))
+                except OSError:
+                    break
+        except (WebSocketDisconnect, ConnectionError):
+            pass
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.error("[SSH] ws→pty error: %s", e)
 
-                    # ── websocket → stdin ──
-                    async def ws_to_ssh():
-                        try:
-                            async for msg in websocket.iter_text():
-                                proc.stdin.write(msg)
-                        except (WebSocketDisconnect, ConnectionError):
-                            pass
-                        except asyncio.CancelledError:
-                            pass
-                        except Exception as e:
-                            logger.error("[SSH] ws→ssh error: %s", e)
+    t1 = asyncio.create_task(pty_to_ws())
+    t2 = asyncio.create_task(ws_to_pty())
 
-                    t1 = asyncio.create_task(ssh_to_ws())
-                    t2 = asyncio.create_task(ws_to_ssh())
+    done, pending = await asyncio.wait(
+        [t1, t2], return_when=asyncio.FIRST_COMPLETED
+    )
 
-                    done, pending = await asyncio.wait(
-                        [t1, t2], return_when=asyncio.FIRST_COMPLETED
-                    )
-                    for t in pending:
-                        t.cancel()
-                    await asyncio.gather(*pending, return_exceptions=True)
+    # Cleanup
+    for t in pending:
+        t.cancel()
+    await asyncio.gather(*pending, return_exceptions=True)
 
-                    logger.info("[SSH] Session ended cleanly")
-                    return  # success — stop trying hosts
+    # Kill the SSH process if still running
+    if process.returncode is None:
+        try:
+            process.kill()
+        except ProcessLookupError:
+            pass
 
-        except Exception as exc:
-            errors.append(f"{host}: {exc}")
-            logger.error("[SSH] Failed on %s: %s", host, exc)
-
-    # All hosts failed
-    detail = " | ".join(errors) if errors else "no hosts"
     try:
-        await websocket.send_text(f"\r\n\x1b[31m*** SSH Failed: {detail} ***\x1b[0m\r\n")
-        await websocket.close(code=1011)
-    except Exception:
+        os.close(master_fd)
+    except OSError:
         pass
+
+    logger.info("[SSH] Session ended (exit=%s)", process.returncode)
 
 # ─── Helpers ────────────────────────────────────────────────────────────────────
 

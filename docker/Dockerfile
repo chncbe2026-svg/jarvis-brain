@@ -2,10 +2,12 @@ FROM python:3.10-slim
 
 WORKDIR /app
 
-# System deps for sentence-transformers (torch)
+# System deps
 RUN apt-get update && apt-get install -y \
     build-essential \
     git \
+    openssh-client \
+    sshpass \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
