@@ -225,129 +225,113 @@ async def health():
 @app.websocket("/api/ssh")
 async def websocket_ssh(websocket: WebSocket):
     """
-    WebSocket-to-SSH bridge using a real PTY + system ssh client.
-    This guarantees a fully interactive terminal with proper escape
-    sequences, arrow keys, tab completion, etc.
+    Opens a real interactive terminal inside this container.
+    Uses a PTY so arrow keys, tab completion, colors all work.
     """
     await websocket.accept()
+    logger.info("[TERM] New terminal session")
 
-    host = (settings.SSH_HOST or "").strip()
-    port = settings.SSH_PORT
-    user = (settings.SSH_USER or "root").strip()
-    password = (settings.SSH_PASSWORD or "").strip()
-    key_path = (settings.SSH_PRIVATE_KEY or "").strip()
-
-    if not host:
-        await websocket.send_text("\r\n\x1b[31m*** SSH_HOST not configured ***\x1b[0m\r\n")
-        await websocket.close(code=1011)
-        return
-
-    # Build the ssh command
-    ssh_cmd = ["ssh", "-tt",
-               "-o", "StrictHostKeyChecking=no",
-               "-o", "UserKnownHostsFile=/dev/null",
-               "-p", str(port)]
-
-    if key_path and os.path.exists(key_path):
-        ssh_cmd += ["-i", key_path]
-
-    ssh_cmd.append(f"{user}@{host}")
-
-    # If password is set and no key, wrap with sshpass
-    if password and not (key_path and os.path.exists(key_path)):
-        ssh_cmd = ["sshpass", "-p", password] + ssh_cmd
-
-    logger.info("[SSH] Spawning: %s", " ".join(ssh_cmd).replace(password, "***") if password else " ".join(ssh_cmd))
-
-    # Open a real pseudo-terminal
     import pty as pty_module
     import struct
     import fcntl
     import termios
+    import errno
 
     master_fd, slave_fd = pty_module.openpty()
 
-    # Set terminal size on the slave
+    # Set terminal size (rows=30, cols=120)
     winsize = struct.pack("HHHH", 30, 120, 0, 0)
     fcntl.ioctl(slave_fd, termios.TIOCSWINSZ, winsize)
 
     # Set master_fd to non-blocking
-    import errno
     flags = fcntl.fcntl(master_fd, fcntl.F_GETFL)
     fcntl.fcntl(master_fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
 
+    # Spawn a real bash shell (or ssh if configured)
+    host = (settings.SSH_HOST or "").strip()
+    password = (settings.SSH_PASSWORD or "").strip()
+    key_path = (settings.SSH_PRIVATE_KEY or "").strip()
+    user = (settings.SSH_USER or "root").strip()
+    port = settings.SSH_PORT
+
+    # Build command: try SSH if host is set, otherwise local bash
+    if host:
+        cmd = ["ssh", "-tt",
+               "-o", "StrictHostKeyChecking=no",
+               "-o", "UserKnownHostsFile=/dev/null",
+               "-p", str(port)]
+        if key_path and os.path.exists(key_path):
+            cmd += ["-i", key_path]
+        cmd.append(f"{user}@{host}")
+        # Wrap with sshpass if password set and no key
+        if password and not (key_path and os.path.exists(key_path)):
+            cmd = ["sshpass", "-p", password] + cmd
+        logger.info("[TERM] SSH mode: %s@%s:%s", user, host, port)
+    else:
+        cmd = ["/bin/bash"]
+        logger.info("[TERM] Local shell mode")
+
     process = await asyncio.create_subprocess_exec(
-        *ssh_cmd,
+        *cmd,
         stdin=slave_fd,
         stdout=slave_fd,
         stderr=slave_fd,
+        env={**os.environ, "TERM": "xterm", "COLUMNS": "120", "LINES": "30"},
     )
 
-    os.close(slave_fd)  # Parent only uses master end
+    os.close(slave_fd)
 
     loop = asyncio.get_running_loop()
-    logger.info("[SSH] PTY process started (pid=%s)", process.pid)
+    logger.info("[TERM] Process started pid=%s cmd=%s", process.pid, cmd[0])
 
-    # ── PTY → WebSocket using loop.add_reader (zero-latency) ──
+    # ── PTY → WebSocket (event-driven, zero latency) ──
     async def pty_to_ws():
-        """Use asyncio event loop to be notified when PTY has data."""
-        queue = asyncio.Queue()
+        queue: asyncio.Queue = asyncio.Queue()
 
-        def on_pty_readable():
+        def _readable():
             try:
                 data = os.read(master_fd, 4096)
-                if data:
-                    queue.put_nowait(data)
-                else:
-                    queue.put_nowait(None)  # EOF
-            except OSError as e:
-                if e.errno != errno.EIO:
-                    logger.error("[SSH] PTY read OSError: %s", e)
+                queue.put_nowait(data if data else None)
+            except OSError:
                 queue.put_nowait(None)
 
-        loop.add_reader(master_fd, on_pty_readable)
+        loop.add_reader(master_fd, _readable)
         try:
             while True:
-                data = await queue.get()
-                if data is None:
+                chunk = await queue.get()
+                if chunk is None:
                     break
-                await websocket.send_text(data.decode("utf-8", errors="replace"))
-        except (WebSocketDisconnect, ConnectionError):
-            pass
-        except asyncio.CancelledError:
+                await websocket.send_text(chunk.decode("utf-8", errors="replace"))
+        except (WebSocketDisconnect, ConnectionError, asyncio.CancelledError):
             pass
         except Exception as e:
-            logger.error("[SSH] pty→ws error: %s", e)
+            logger.error("[TERM] pty→ws: %s", e)
         finally:
-            loop.remove_reader(master_fd)
+            try:
+                loop.remove_reader(master_fd)
+            except Exception:
+                pass
 
     # ── WebSocket → PTY ──
     async def ws_to_pty():
         try:
             async for msg in websocket.iter_text():
-                try:
-                    os.write(master_fd, msg.encode("utf-8"))
-                except OSError:
-                    break
-        except (WebSocketDisconnect, ConnectionError):
+                os.write(master_fd, msg.encode("utf-8"))
+        except (WebSocketDisconnect, ConnectionError, asyncio.CancelledError):
             pass
-        except asyncio.CancelledError:
+        except OSError:
             pass
         except Exception as e:
-            logger.error("[SSH] ws→pty error: %s", e)
+            logger.error("[TERM] ws→pty: %s", e)
 
     t1 = asyncio.create_task(pty_to_ws())
     t2 = asyncio.create_task(ws_to_pty())
 
-    done, pending = await asyncio.wait(
-        [t1, t2], return_when=asyncio.FIRST_COMPLETED
-    )
-
+    done, pending = await asyncio.wait([t1, t2], return_when=asyncio.FIRST_COMPLETED)
     for t in pending:
         t.cancel()
     await asyncio.gather(*pending, return_exceptions=True)
 
-    # Kill SSH process if still running
     if process.returncode is None:
         try:
             process.kill()
@@ -359,7 +343,7 @@ async def websocket_ssh(websocket: WebSocket):
     except OSError:
         pass
 
-    logger.info("[SSH] Session ended (exit=%s)", process.returncode)
+    logger.info("[TERM] Session ended exit=%s", process.returncode)
 
 # ─── Helpers ────────────────────────────────────────────────────────────────────
 
