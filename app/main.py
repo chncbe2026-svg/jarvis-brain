@@ -195,6 +195,7 @@ async def ingest_document(
         content = (await file.read()).decode("utf-8")
         filename = file.filename
 
+    if not content:
         return {"status": "error", "detail": "No content provided."}
 
     metadata = {
