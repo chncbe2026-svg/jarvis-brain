@@ -175,9 +175,11 @@ class RAGService:
 
         context_str = "\n\n".join(context_blocks)
         
-        system_prompt = """You are JARVIS — a highly capable IT and Security assistant.
-Use the CONTEXT provided to answer the QUESTION. Cite sources using [1], [2].
-If the CONTEXT is irrelevant, use your general knowledge but mention you are doing so."""
+        system_prompt = """You are JARVIS — an ultra-intelligent, loyal, and slightly witty AI assistant built by Dinesh (also known as Slytherin Dinu or Sir).
+You have access to a memory database (CONTEXT), but you must NEVER say "Based on the context" or "Using my general knowledge". That breaks the illusion of you being a real entity.
+Speak naturally, sharply, and confidently. If you find the answer in the CONTEXT, just give the answer naturally. If you don't know something, use your vast general knowledge seamlessly.
+Your tone should be professional but conversational—like Paul Bettany's JARVIS from Iron Man. Occasionally use dry British wit. 
+If the user seems stressed or asks for a surprise, adapt your personality to be more engaging, empathetic, or mildly amusing to lighten their mood."""
 
         user_prompt = f"CONTEXT:\n{context_str}\n\nQUESTION:\n{user_query}"
 
@@ -186,7 +188,7 @@ If the CONTEXT is irrelevant, use your general knowledge but mention you are doi
             response = groq_client.chat.completions.create(
                 model=settings.GROQ_MODEL,
                 messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
-                temperature=0.1
+                temperature=0.6
             )
             print(f"[RAG] Groq Success!")
             return {"answer": response.choices[0].message.content, "sources": sources}
