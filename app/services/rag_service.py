@@ -44,9 +44,9 @@ def hybrid_search(
     qdrant_filter: Optional[Filter] = None
 ) -> List[Dict]:
     """
-    Combines Semantic (Dense) search and BM25 (Keyword) search.
+    Pure Semantic Search for Maximum Speed. 
+    (BM25/Scroll disabled for performance).
     """
-    print(f"[RAG] Hybrid Search in {collection} for: {query}")
     # 1. Semantic Search
     query_vector = embedder.embed_query(query)
     search_response = qdrant.query_points(
@@ -57,57 +57,12 @@ def hybrid_search(
         with_payload=True,
     )
     semantic_hits = search_response.points
-    print(f"[RAG] Semantic Hits: {len(semantic_hits)}")
-
-    # 2. BM25 Search
-    try:
-        scroll_results, _ = qdrant.scroll(
-            collection_name=collection,
-            scroll_filter=qdrant_filter,
-            limit=200,
-            with_payload=True,
-        )
-    except Exception as e:
-        print(f"[RAG] Scroll failed: {e}")
-        scroll_results = []
-
-    docs = [r.payload.get("text", "") for r in scroll_results]
-    doc_ids = [str(r.id) for r in scroll_results]
-
-    bm25_scores = {}
-    if docs:
-        tokenized = [d.lower().split() for d in docs]
-        bm25 = BM25Okapi(tokenized)
-        scores = bm25.get_scores(query.lower().split())
-        bm25_scores = {doc_ids[i]: float(scores[i]) for i in range(len(doc_ids))}
-        print(f"[RAG] BM25 found {len(docs)} docs to rank")
-
-    # 3. Fuse Results (Simple Linear Combination)
-    sem_map = {str(hit.id): hit.score for hit in semantic_hits}
-    sem_payloads = {str(hit.id): hit.payload for hit in semantic_hits}
     
-    alpha = settings.HYBRID_ALPHA
     combined = []
-    all_ids = set(sem_map.keys()) | set(bm25_scores.keys())
+    for hit in semantic_hits:
+        combined.append({"id": str(hit.id), "score": hit.score, "payload": hit.payload})
 
-    for doc_id in all_ids:
-        s_score = sem_map.get(doc_id, 0.0)
-        b_score = bm25_scores.get(doc_id, 0.0)
-        fused_score = (alpha * s_score) + ((1 - alpha) * (b_score / 10.0))
-        
-        payload = sem_payloads.get(doc_id)
-        if not payload:
-            for r in scroll_results:
-                if str(r.id) == doc_id:
-                    payload = r.payload
-                    break
-
-        if payload:
-            combined.append({"id": doc_id, "score": fused_score, "payload": payload})
-
-    combined.sort(key=lambda x: x["score"], reverse=True)
-    print(f"[RAG] Fused Results: {len(combined)}")
-    return combined[:top_k]
+    return combined
 
 class RAGService:
     def chunk_text(self, text: str) -> List[str]:
@@ -200,14 +155,9 @@ class RAGService:
                 return {"answer": f"System Error: {error_msg}", "sources": []}
             return {"answer": "Sir, I have searched the knowledge base but found no relevant information regarding this query. Is there anything else I can assist you with?", "sources": []}
 
-        print(f"[RAG] Reranking {len(all_candidates)} candidates...")
-        # Reranking using Local CrossEncoder (High Accuracy)
-        doc_texts = [c["payload"].get("text", "") for c in all_candidates]
-        rerank_results = embedder.rerank(user_query, doc_texts, settings.TOP_K_RERANK)
-        
-        final_docs = []
-        for res in rerank_results:
-            final_docs.append(all_candidates[res["index"]])
+        # Sort by Qdrant Semantic Score and take top K
+        all_candidates.sort(key=lambda x: x["score"], reverse=True)
+        final_docs = all_candidates[:settings.TOP_K_RERANK]
 
         print(f"[RAG] Final docs selected: {len(final_docs)}")
         # Build context

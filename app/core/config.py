@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     
     # High-quality local models for Ubuntu/Local hosting
     EMBEDDING_MODEL: str = "nomic-ai/nomic-embed-text-v1.5"
-    GROQ_MODEL: str = "llama-3.3-70b-versatile"
+    GROQ_MODEL: str = "llama-3.1-8b-instant"
     RERANKER_MODEL: str = "BAAI/bge-reranker-base"
     
     # RAG Pipeline tuning
