@@ -275,32 +275,48 @@ async def websocket_ssh(websocket: WebSocket):
                     logger.info("[SSH] Interactive bash shell started")
                     await websocket.send_text('\r\n\x1b[32m*** Secure Shell Channel Open ***\x1b[0m\r\n\r\n')
                     
-                    # Wait for the shell to initialize and send the motd/prompt
-                    await asyncio.sleep(0.2)
+                    # Force a newline to trigger the initial prompt flush if needed
+                    process.stdin.write('\n')
+                    await process.stdin.drain()
 
                     async def read_from_ws():
                         try:
                             while True:
                                 data = await websocket.receive_text()
-                                if data:
-                                    process.stdin.write(data)
-                                    await process.stdin.drain()
-                        except (WebSocketDisconnect, ConnectionError):
-                            pass
+                                process.stdin.write(data)
+                                await process.stdin.drain()
+                        except (WebSocketDisconnect, ConnectionError, asyncio.CancelledError):
+                            logger.info("[SSH] WebSocket reader terminated")
                         except Exception as e:
                             logger.error(f"[SSH] WS -> SSH Error: {e}")
 
                     async def read_from_ssh():
                         try:
                             while not process.stdout.at_eof():
-                                # Use a smaller chunk size for better responsiveness
+                                # read(1024) returns immediately as soon as data arrives
                                 data = await process.stdout.read(1024)
                                 if data:
                                     await websocket.send_text(data)
+                        except (WebSocketDisconnect, ConnectionError, asyncio.CancelledError):
+                            logger.info("[SSH] SSH stdout reader terminated")
+                        except Exception as e:
+                            logger.error(f"[SSH] SSH -> WS Error: {e}")
+
+                    # Orchestrate both directions using tasks
+                    ws_task = asyncio.create_task(read_from_ws())
+                    ssh_task = asyncio.create_task(read_from_ssh())
+
+                    done, pending = await asyncio.wait(
+                        [ws_task, ssh_task],
+                        return_when=asyncio.FIRST_COMPLETED
+                    )
+
+                    # Cleanly cancel the other task when one finishes (e.g. disconnect)
                     for task in pending:
                         task.cancel()
+                    
                     await asyncio.gather(*pending, return_exceptions=True)
-                    await asyncio.gather(*done, return_exceptions=True)
+                    logger.info("[SSH] Session tasks cleaned up")
                     return
         except Exception as exc:
             errors.append(f"{host}: {exc}")
