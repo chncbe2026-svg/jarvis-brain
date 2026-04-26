@@ -30,11 +30,11 @@ class Settings(BaseSettings):
     RSS_SYNC_INTERVAL_MINS: int = 30
 
     # SSH Settings
-    SSH_HOST: str = "172.17.0.1"
+    SSH_HOST: str = "host.docker.internal"
     SSH_PORT: int = 22
     SSH_USER: str = "root"
     SSH_PASSWORD: str = ""
-    SSH_PRIVATE_KEY: str = ""
+    SSH_PRIVATE_KEY: str = "/app/ssh_key"
 
     class Config:
         env_file = ".env"

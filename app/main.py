@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
 from typing import Optional, Dict, Any
 
@@ -221,67 +222,103 @@ async def health():
     return {"status": "healthy", "groq_model": settings.GROQ_MODEL}
 
 
-import os
-
 @app.websocket("/api/ssh")
 async def websocket_ssh(websocket: WebSocket):
     await websocket.accept()
-    
-    host = settings.SSH_HOST
+
     port = settings.SSH_PORT
-    user = settings.SSH_USER
-    password = settings.SSH_PASSWORD
-    private_key_path = settings.SSH_PRIVATE_KEY
-    
-    connect_kwargs = {
-        "host": host,
-        "port": port,
-        "username": user,
-        "known_hosts": None,
-        "agent_path": None  # Disable agent to avoid interference
-    }
-    
-    # Prioritize Key Authentication
+    user = (settings.SSH_USER or "").strip()
+    password = (settings.SSH_PASSWORD or "").strip()
+    private_key_path = (settings.SSH_PRIVATE_KEY or "").strip()
+    hosts_to_try = _candidate_ssh_hosts((settings.SSH_HOST or "").strip())
+
     if private_key_path and os.path.exists(private_key_path):
-        logger.info(f"[SSH] Using private key at {private_key_path}")
-        connect_kwargs["client_keys"] = [private_key_path]
-    
-    # Add password as fallback if provided
-    if password:
-        logger.info(f"[SSH] Using password authentication for {user}")
-        connect_kwargs["password"] = password
-        
-    try:
-        async with asyncssh.connect(**connect_kwargs) as conn:
-            async with conn.create_process(term_type='xterm', encoding='utf-8') as process:
-                await websocket.send_text('\r\n\x1b[32m*** Connected to JARVIS Brain via Python Tunnel ***\x1b[0m\r\n\r\n')
-                
-                async def read_from_ws():
-                    try:
-                        while True:
-                            data = await websocket.receive_text()
-                            process.stdin.write(data)
-                    except WebSocketDisconnect:
-                        pass
-                        
-                async def read_from_ssh():
-                    try:
-                        while not process.stdout.at_eof():
-                            data = await process.stdout.read(4096)
-                            if data:
-                                await websocket.send_text(data)
-                    except Exception as e:
-                        logger.error(f"SSH Read Error: {e}")
-                        
-                await asyncio.gather(read_from_ws(), read_from_ssh())
-                
-    except Exception as e:
-        logger.error(f"SSH Connection Failed: {e}")
+        auth_mode = "private key"
+    elif password:
+        auth_mode = "password"
+    else:
+        logger.warning("[SSH] No usable SSH credentials found for websocket session")
+        await websocket.send_text("\r\n\x1b[31m*** SSH Failed: No SSH private key or password configured ***\x1b[0m\r\n")
+        await websocket.close(code=1011)
+        return
+
+    errors = []
+
+    for host in hosts_to_try:
+        connect_kwargs = {
+            "host": host,
+            "port": port,
+            "username": user,
+            "known_hosts": None,
+            "agent_path": None,
+        }
+
+        if auth_mode == "private key":
+            logger.info("[SSH] Using private key at %s", private_key_path)
+            connect_kwargs["client_keys"] = [private_key_path]
+        else:
+            logger.info("[SSH] Using password authentication for %s", user)
+            connect_kwargs["password"] = password
+
         try:
-            await websocket.send_text(f"\r\n\x1b[31m*** SSH Failed: {str(e)} ***\x1b[0m\r\n")
-            await websocket.close()
-        except:
-            pass
+            logger.info("[SSH] Attempting websocket tunnel to %s@%s:%s via %s", user, host, port, auth_mode)
+            async with asyncssh.connect(**connect_kwargs) as conn:
+                async with conn.create_process(
+                    term_type="xterm",
+                    encoding="utf-8",
+                    stderr=asyncssh.STDOUT,
+                ) as process:
+                    await websocket.send_text(
+                        f"\r\n\x1b[32m*** Connected to JARVIS Brain via Python Tunnel ({host}) ***\x1b[0m\r\n\r\n"
+                    )
+
+                    async def read_from_ws():
+                        try:
+                            while True:
+                                data = await websocket.receive_text()
+                                logger.info(f"[SSH] Received {len(data)} chars: {data[:10]}")
+                                process.stdin.write(data)
+                        except WebSocketDisconnect:
+                            logger.info("[SSH] WebSocket disconnected")
+                        except Exception as exc:
+                            logger.error("WebSocket receive failed: %s", exc)
+                        finally:
+                            try:
+                                process.stdin.write_eof()
+                            except Exception:
+                                pass
+
+                    async def read_from_ssh():
+                        try:
+                            while not process.stdout.at_eof():
+                                data = await process.stdout.read(4096)
+                                if data:
+                                    await websocket.send_text(data)
+                        except Exception as exc:
+                            logger.error("SSH stream read failed: %s", exc)
+
+                    ws_task = asyncio.create_task(read_from_ws())
+                    ssh_task = asyncio.create_task(read_from_ssh())
+                    done, pending = await asyncio.wait(
+                        {ws_task, ssh_task},
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+
+                    for task in pending:
+                        task.cancel()
+                    await asyncio.gather(*pending, return_exceptions=True)
+                    await asyncio.gather(*done, return_exceptions=True)
+                    return
+        except Exception as exc:
+            errors.append(f"{host}: {exc}")
+            logger.error("SSH Connection Failed for host %s: %s", host, exc)
+
+    details = " | ".join(errors) if errors else "No SSH hosts were attempted"
+    try:
+        await websocket.send_text(f"\r\n\x1b[31m*** SSH Failed: {details} ***\x1b[0m\r\n")
+        await websocket.close(code=1011)
+    except Exception:
+        pass
 
 # ─── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -299,3 +336,12 @@ def _format_source_footer(sources: list) -> str:
             line += f" — [link]({s['link']})"
         lines.append(line)
     return "\n".join(lines)
+
+
+def _candidate_ssh_hosts(primary_host: str) -> list[str]:
+    hosts = []
+    for host in [primary_host, "host.docker.internal", "172.17.0.1"]:
+        host = (host or "").strip()
+        if host and host not in hosts:
+            hosts.append(host)
+    return hosts
