@@ -77,7 +77,11 @@ app = FastAPI(title="Jarvis RAG Backend — Professional Edition", lifespan=life
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],   # Narrow this down in production
+    allow_origins=[
+        "http://localhost:3000",
+        "http://localhost:3001",
+        "https://jarvisbrain.dinuping.com",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
