@@ -1,4 +1,5 @@
 import uuid
+import random
 from typing import List, Optional, Dict, Any
 from groq import Groq
 from app.core.config import settings
@@ -10,7 +11,6 @@ from rank_bm25 import BM25Okapi
 import logging
 
 logger = logging.getLogger(__name__)
-groq_client = Groq(api_key=settings.GROQ_API_KEY)
 
 def chunk_text_simple(text: str, chunk_size: int = 2000, overlap: int = 400) -> List[str]:
     """Simple character-based chunking to replace tiktoken and save RAM."""
@@ -64,6 +64,26 @@ def hybrid_search(
     return combined
 
 class RAGService:
+    def __init__(self):
+        self.clients = []
+        self._refresh_clients()
+
+    def _refresh_clients(self):
+        """Initialize Groq clients from the rotation list."""
+        keys = settings.groq_keys_list
+        self.clients = [Groq(api_key=key) for key in keys]
+        if not self.clients and settings.GROQ_API_KEY:
+            self.clients = [Groq(api_key=settings.GROQ_API_KEY)]
+        
+        logger.info(f"Initialized {len(self.clients)} Groq clients for rotation.")
+
+    def _get_client(self) -> Groq:
+        """Get a random client from the pool."""
+        if not self.clients:
+            # Fallback if list was empty at init
+            return Groq(api_key=settings.GROQ_API_KEY)
+        return random.choice(self.clients)
+
     def chunk_text(self, text: str) -> List[str]:
         return chunk_text_simple(text)
 
@@ -203,9 +223,10 @@ CRITICAL RULES:
 
         user_prompt = f"CONTEXT:\n{context_str}\n\nQUESTION:\n{user_query}"
 
-        print(f"[RAG] Sending to Groq...")
+        print(f"[RAG] Sending to Groq (Rotated Key)...")
         try:
-            response = groq_client.chat.completions.create(
+            client = self._get_client()
+            response = client.chat.completions.create(
                 model=settings.GROQ_MODEL,
                 messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
                 temperature=0.4

@@ -3,7 +3,14 @@ from functools import lru_cache
 
 class Settings(BaseSettings):
     GROQ_API_KEY: str = ""
+    GROQ_KEYS: str = ""  # Comma-separated list of keys for rotation
     MIXEDBREAD_API_KEY: str = ""
+    
+    @property
+    def groq_keys_list(self) -> list:
+        if not self.GROQ_KEYS:
+            return [self.GROQ_API_KEY] if self.GROQ_API_KEY else []
+        return [k.strip() for k in self.GROQ_KEYS.split(",") if k.strip()]
     
     QDRANT_HOST: str = "localhost"
     QDRANT_PORT: int = 6333
