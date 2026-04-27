@@ -1,5 +1,6 @@
 import uuid
 import random
+import os
 from typing import List, Optional, Dict, Any
 from groq import Groq
 from app.core.config import settings
@@ -70,9 +71,22 @@ class RAGService:
 
     def _refresh_clients(self):
         """Initialize Groq clients from the rotation list."""
+        # DEBUG: Check environment directly
+        raw_env_keys = os.getenv("GROQ_KEYS", "")
+        print(f"[DEBUG] Raw GROQ_KEYS from ENV: {raw_env_keys[:20]}... (length: {len(raw_env_keys)})")
+        
         keys = settings.groq_keys_list
-        self.clients = [Groq(api_key=key) for key in keys]
+        print(f"[DEBUG] Parsed keys list length: {len(keys)}")
+        
+        self.clients = []
+        for i, key in enumerate(keys):
+            if key:
+                masked_key = f"{key[:10]}...{key[-4:]}"
+                print(f"[DEBUG] Initializing Client {i+1} with key: {masked_key}")
+                self.clients.append(Groq(api_key=key))
+        
         if not self.clients and settings.GROQ_API_KEY:
+            print(f"[DEBUG] Falling back to GROQ_API_KEY")
             self.clients = [Groq(api_key=settings.GROQ_API_KEY)]
         
         logger.info(f"Initialized {len(self.clients)} Groq clients for rotation.")
@@ -223,11 +237,16 @@ CRITICAL RULES:
         user_prompt = f"CONTEXT:\n{context_str}\n\nQUESTION:\n{user_query}"
 
         # ─── ROTATION WITH RETRY LOGIC ───
-        max_retries = min(len(self.clients), 3)
+        # Use a copy of clients to avoid permanently removing them during a single request flow
+        active_clients = list(self.clients)
+        max_retries = min(len(active_clients), 3)
         last_error = None
 
         for attempt in range(max_retries):
-            client = self._get_client()
+            if not active_clients:
+                break
+                
+            client = random.choice(active_clients)
             print(f"[RAG] Sending to Groq (Attempt {attempt+1}/{max_retries})...")
             try:
                 response = client.chat.completions.create(
@@ -242,14 +261,13 @@ CRITICAL RULES:
                 error_str = str(e).lower()
                 print(f"[RAG] GROQ ATTEMPT {attempt+1} FAILED: {e}")
                 
-                # If it's an invalid key or rate limit, we should ideally remove it from pool for this session
+                # If it's an invalid key or rate limit, remove from the current active pool
                 if "invalid api key" in error_str or "401" in error_str or "rate_limit_exceeded" in error_str or "429" in error_str:
-                    if client in self.clients:
-                        print(f"[RAG] Removing problematic key from current pool.")
-                        self.clients.remove(client)
-                
-                if not self.clients:
-                    break
+                    print(f"[RAG] Removing problematic key from active retry pool.")
+                    active_clients.remove(client)
+                else:
+                    # For other errors, maybe don't remove, just continue
+                    active_clients.remove(client)
 
         return {"answer": f"Sir, I've exhausted all available API keys or encountered a persistent error: {last_error}", "sources": sources}
 
