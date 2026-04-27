@@ -28,6 +28,7 @@ services:
     volumes:
       - fastembed_cache:/root/.cache
       - ~/.ssh/id_ed25519:/app/ssh_key:ro
+      - ..:/app
 
     depends_on:
       - qdrant

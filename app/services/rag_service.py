@@ -80,7 +80,6 @@ class RAGService:
     def _get_client(self) -> Groq:
         """Get a random client from the pool."""
         if not self.clients:
-            # Fallback if list was empty at init
             return Groq(api_key=settings.GROQ_API_KEY)
         return random.choice(self.clients)
 
@@ -223,19 +222,36 @@ CRITICAL RULES:
 
         user_prompt = f"CONTEXT:\n{context_str}\n\nQUESTION:\n{user_query}"
 
-        print(f"[RAG] Sending to Groq (Rotated Key)...")
-        try:
+        # ─── ROTATION WITH RETRY LOGIC ───
+        max_retries = min(len(self.clients), 3)
+        last_error = None
+
+        for attempt in range(max_retries):
             client = self._get_client()
-            response = client.chat.completions.create(
-                model=settings.GROQ_MODEL,
-                messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
-                temperature=0.4
-            )
-            print(f"[RAG] Groq Success!")
-            return {"answer": response.choices[0].message.content, "sources": sources}
-        except Exception as e:
-            print(f"[RAG] GROQ ERROR: {e}")
-            return {"answer": f"Sir, I encountered an error while communicating with Groq: {e}", "sources": sources}
+            print(f"[RAG] Sending to Groq (Attempt {attempt+1}/{max_retries})...")
+            try:
+                response = client.chat.completions.create(
+                    model=settings.GROQ_MODEL,
+                    messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
+                    temperature=0.4
+                )
+                print(f"[RAG] Groq Success!")
+                return {"answer": response.choices[0].message.content, "sources": sources}
+            except Exception as e:
+                last_error = e
+                error_str = str(e).lower()
+                print(f"[RAG] GROQ ATTEMPT {attempt+1} FAILED: {e}")
+                
+                # If it's an invalid key or rate limit, we should ideally remove it from pool for this session
+                if "invalid api key" in error_str or "401" in error_str or "rate_limit_exceeded" in error_str or "429" in error_str:
+                    if client in self.clients:
+                        print(f"[RAG] Removing problematic key from current pool.")
+                        self.clients.remove(client)
+                
+                if not self.clients:
+                    break
+
+        return {"answer": f"Sir, I've exhausted all available API keys or encountered a persistent error: {last_error}", "sources": sources}
 
 rag_service = RAGService()
 
