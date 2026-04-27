@@ -45,7 +45,6 @@ def hybrid_search(
 ) -> List[Dict]:
     """
     Pure Semantic Search for Maximum Speed. 
-    (BM25/Scroll disabled for performance).
     """
     # 1. Semantic Search
     query_vector = embedder.embed_query(query)
@@ -89,11 +88,11 @@ class RAGService:
         user_query: str,
         collection: Optional[str] = None,
         filters: Optional[Dict[str, Any]] = None,
+        history: Optional[List[Dict[str, str]]] = None
     ) -> Dict[str, Any]:
         print(f"[RAG] Processing Query: {user_query}")
         
         # ─── AUTO-LEARNING LOGIC ───
-        # Clean the query (remove "JARVIS, " prefix)
         clean_query = user_query.lower().strip()
         if clean_query.startswith("jarvis"):
             clean_query = clean_query.replace("jarvis", "", 1).strip().lstrip(",").strip()
@@ -108,25 +107,44 @@ class RAGService:
                         fact = clean_query[len(word):].strip()
                         break
                 
-                # Use original case for the stored fact if possible
-                original_fact = user_query
-                if clean_query in user_query.lower():
-                    # Try to find the cleaned part in original text to preserve case
-                    start_idx = user_query.lower().find(fact)
-                    if start_idx != -1:
-                        original_fact = user_query[start_idx:].strip()
-                else:
-                    original_fact = fact # Fallback to cleaned lowercase
+                # Context Awareness: If fact uses pronouns, try to resolve from history
+                subject = None
+                if history and len(history) > 0:
+                    # Get last user message that wasn't a learn command
+                    last_user_msg = None
+                    for msg in reversed(history):
+                        if msg.get("role") == "user" and not any(w in msg.get("content", "").lower() for w in ["learn", "remember"]):
+                            last_user_msg = msg.get("content", "")
+                            break
+                    
+                    if last_user_msg:
+                        # Simple heuristic: if learn fact starts with "he", "she", "it", or "they"
+                        if any(fact.startswith(p) for p in ["he is", "she is", "it is", "they are", "he ", "she ", "it "]):
+                            subject = last_user_msg.strip().capitalize()
+                            print(f"[RAG] Resolved pronoun subject from history: {subject}")
+                
+                # Construct final fact for storage
+                stored_fact = fact
+                if subject:
+                    # Replace "he is" with "Subject is"
+                    for p in ["he is", "she is", "it is"]:
+                        if fact.startswith(p):
+                            stored_fact = fact.replace(p, f"{subject} is", 1)
+                            break
+                    else:
+                        # Fallback: prepend subject
+                        stored_fact = f"{subject}: {fact}"
                 
                 metadata = {
                     "source": "manual_voice_learning",
                     "type": "personal_memory",
-                    "timestamp": str(uuid.uuid4())
+                    "timestamp": str(uuid.uuid4()),
+                    "original_query": user_query
                 }
-                await self.ingest_text(original_fact, metadata, settings.COLLECTION_PERSONAL)
+                await self.ingest_text(stored_fact, metadata, settings.COLLECTION_PERSONAL)
                 
                 return {
-                    "answer": f"Sir, I've successfully committed that to my central knowledge base. I will remember that: \"{original_fact}\"",
+                    "answer": f"Sir, I've successfully committed that to my central knowledge base. I will remember that: \"{stored_fact}\"",
                     "sources": []
                 }
             except Exception as e:
@@ -165,8 +183,8 @@ class RAGService:
         sources = []
         for i, doc in enumerate(final_docs, 1):
             p = doc["payload"]
-            title = p.get("title", "Unknown")
-            vendor = p.get("vendor", "System")
+            title = p.get("title", "System Info")
+            vendor = p.get("vendor", "Internal")
             context_blocks.append(f"### Source {i}: {title}\n{p.get('text', '')}")
             sources.append({
                 "id": i, "title": title, "vendor": vendor, 
@@ -175,13 +193,13 @@ class RAGService:
 
         context_str = "\n\n".join(context_blocks)
         
-        system_prompt = """You are JARVIS — an ultra-intelligent, loyal, and slightly witty AI assistant built by Dinesh (also known as Slytherin Dinu or Sir).
-You have access to a memory database (CONTEXT), but you must NEVER say "Based on the context" or "Using my general knowledge". That breaks the illusion of you being a real entity.
+        system_prompt = """You are JARVIS — an ultra-intelligent, loyal, and slightly witty AI assistant built by Dinesh (Sir).
+You have access to a memory database (CONTEXT), but you must NEVER say "Based on the context". 
 CRITICAL RULES:
-1. BE CRISP AND CONCISE. Do not babble or give long lists unless explicitly asked. Keep answers short and punchy.
-2. Speak naturally, sharply, and confidently. If you don't know something, use your vast general knowledge seamlessly.
-3. Your tone must be like Paul Bettany's JARVIS from Iron Man—dry British wit, slightly sarcastic, but always loyal and highly competent. 
-4. Be funny when appropriate, using clever understated humor rather than forced jokes. If the user asks something simple, answer directly with a touch of class."""
+1. BE CRISP AND CONCISE. 
+2. Speak naturally, sharply, and confidently.
+3. Your tone must be dry British wit (Paul Bettany style). 
+4. If the user asks about a person or fact you just learned, answer directly using the provided context."""
 
         user_prompt = f"CONTEXT:\n{context_str}\n\nQUESTION:\n{user_query}"
 
@@ -190,7 +208,7 @@ CRITICAL RULES:
             response = groq_client.chat.completions.create(
                 model=settings.GROQ_MODEL,
                 messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
-                temperature=0.6
+                temperature=0.4
             )
             print(f"[RAG] Groq Success!")
             return {"answer": response.choices[0].message.content, "sources": sources}

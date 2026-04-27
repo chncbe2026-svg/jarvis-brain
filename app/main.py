@@ -2,7 +2,7 @@ import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
 from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -23,7 +23,8 @@ settings = get_settings()
 class QueryRequest(BaseModel):
     message: str
     collection: Optional[str] = None
-    filters: Optional[Dict[str, Any]] = None   # e.g. {"vendor": "Cisco", "severity": "Critical"}
+    filters: Optional[Dict[str, Any]] = None
+    history: Optional[List[Dict[str, str]]] = None
 
 class ChatRequest(BaseModel):
     """Backwards-compatible shape for existing Jarvis frontend."""
@@ -112,18 +113,13 @@ async def chat_compat(req: ChatRequest):
 async def query(req: QueryRequest):
     """
     Full RAG query with optional collection targeting and metadata filters.
-
-    Example body:
-    {
-        "message": "Show critical Cisco advisories",
-        "filters": {"vendor": "Cisco", "severity": "Critical", "published_after": "2026-04-01"}
-    }
     """
     rag = get_rag_service()
     result = await rag.query(
         user_query=req.message,
         collection=req.collection,
         filters=req.filters,
+        history=req.history
     )
     return result
 
@@ -136,8 +132,6 @@ async def get_latest_news(
 ):
     """
     Return the most recently ingested security news items.
-    Optionally filter by vendor or severity query params.
-    Example: GET /news/latest?vendor=Cisco&severity=Critical
     """
     qdrant = get_qdrant_client()
     from qdrant_client.http.models import Filter, FieldCondition, MatchValue
@@ -185,7 +179,6 @@ async def ingest_document(
 ):
     """
     Ingest a document (txt, md) or raw text into a named collection.
-    Supports metadata: vendor, severity.
     """
     rag = get_rag_service()
     content = text
@@ -358,12 +351,3 @@ def _format_source_footer(sources: list) -> str:
             line += f" — [link]({s['link']})"
         lines.append(line)
     return "\n".join(lines)
-
-
-def _candidate_ssh_hosts(primary_host: str) -> list[str]:
-    hosts = []
-    for host in [primary_host, "host.docker.internal", "172.17.0.1"]:
-        host = (host or "").strip()
-        if host and host not in hosts:
-            hosts.append(host)
-    return hosts
