@@ -15,7 +15,17 @@ class EmbeddingService:
         
         # Load the Reranker locally since we have enough RAM on Ubuntu
         logger.info(f"Loading local reranker model: {settings.RERANKER_MODEL}")
-        self.reranker = TextCrossEncoder(settings.RERANKER_MODEL, threads=1)
+        
+        # Handle outdated model string from .env
+        reranker_model = settings.RERANKER_MODEL
+        if reranker_model == "cross-encoder/ms-marco-MiniLM-L-6-v2":
+            reranker_model = "Xenova/ms-marco-MiniLM-L-6-v2"
+            
+        try:
+            self.reranker = TextCrossEncoder(reranker_model, threads=1)
+        except ValueError:
+            logger.warning(f"Reranker {reranker_model} not supported, falling back to BAAI/bge-reranker-base")
+            self.reranker = TextCrossEncoder("BAAI/bge-reranker-base", threads=1)
 
     def embed_query(self, query: str) -> List[float]:
         """Embed a single query for searching."""
