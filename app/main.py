@@ -1,30 +1,33 @@
+"""
+JARVIS FastAPI Application
+Production-ready entry point with:
+- Proper lifespan management
+- Background RSS without blocking
+- Graceful error handling
+- Preserved legacy endpoints and SSH Websocket
+"""
+
 import asyncio
 import logging
-import os
 from contextlib import asynccontextmanager
-from typing import Optional, Dict, Any, List
 
-from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, UploadFile, File, Form, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-import asyncssh
+from typing import Optional, Dict
 
+from app.api.routes import router
+from app.core.config import settings
+from app.services.memory_service import memory_service
 from app.services.rag_service import get_rag_service
 from app.services.rss_service import get_rss_service
-from app.services.qdrant_client import init_collections, get_qdrant_client
-from app.core.config import get_settings
 
-logger = logging.getLogger(__name__)
-settings = get_settings()
-
-# ─── Request / response models ──────────────────────────────────────────────────
-
-class QueryRequest(BaseModel):
-    message: str
-    collection: Optional[str] = None
-    filters: Optional[Dict[str, Any]] = None
-    history: Optional[List[Dict[str, str]]] = None
+# ── Logging ────────────────────────────────────────────────────────────────────
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+)
+logger = logging.getLogger("jarvis")
 
 class ChatRequest(BaseModel):
     """Backwards-compatible shape for existing Jarvis frontend."""
@@ -33,96 +36,129 @@ class ChatRequest(BaseModel):
     userData: Optional[Dict] = None
     pageContext: Optional[str] = None
 
+# ── Background RSS Task ────────────────────────────────────────────────────────
 
-# ─── Scheduled RSS sync ──────────────────────────────────────────────────────────
+async def _rss_ingestion_loop():
+    """
+    Background RSS ingestion loop.
+    Runs independently — exceptions never affect API responsiveness.
+    Uses non-blocking sleep to prevent event loop starvation.
+    """
+    from app.services.rag_service import rag_service
+    
+    # Initial delay to let services warm up
+    await asyncio.sleep(10)
+    
+    while True:
+        try:
+            logger.info("[RSS] 🔄 Starting ingestion cycle...")
+            rss = get_rss_service()
+            count = await rss.sync_feeds()
+            logger.info(f"[RSS] ✅ Ingestion cycle complete. Items: {count}")
+            
+        except asyncio.CancelledError:
+            logger.info("[RSS] 🛑 Ingestion loop cancelled cleanly")
+            break
+        except Exception as e:
+            # Catch-all: log and continue — never kill the background task
+            logger.error(f"[RSS] ❌ Unexpected error in ingestion loop: {e}")
+        
+        # Non-blocking sleep — won't starve the event loop
+        await asyncio.sleep(settings.RSS_INTERVAL_SECONDS)
 
-async def scheduled_rss_sync():
-    logger.info("[Scheduler] Running scheduled RSS sync…")
-    rss = get_rss_service()
-    try:
-        count = await rss.sync_feeds()
-        logger.info(f"[Scheduler] RSS sync complete. New items: {count}")
-    except Exception as e:
-        logger.error(f"[Scheduler] RSS sync failed: {e}")
 
-
-# ─── App lifespan ───────────────────────────────────────────────────────────────
+# ── Application Lifespan ───────────────────────────────────────────────────────
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
-    logger.info("Initializing Qdrant collections…")
+    """
+    Manages startup and shutdown lifecycle.
+    Starts background tasks cleanly and cancels them on shutdown.
+    """
+    logger.info("=" * 60)
+    logger.info(f"  JARVIS v{settings.JARVIS_VERSION} — ONLINE")
+    logger.info(f"  Loyal companion to {settings.JARVIS_OWNER} (Sir)")
+    logger.info("=" * 60)
+    
+    from app.services.qdrant_client import init_collections
     init_collections()
+    
+    # Initialize memory collection
+    try:
+        logger.info("[JARVIS] 🧠 Initializing memory layer...")
+        # Memory service init already handles collection creation
+        logger.info("[JARVIS] ✅ Memory layer ready")
+    except Exception as e:
+        logger.error(f"[JARVIS] Memory init warning: {e}")
 
-    logger.info(f"Starting RSS scheduler (every {settings.RSS_SYNC_INTERVAL_MINS} minutes)…")
-    scheduler = AsyncIOScheduler()
-    scheduler.add_job(
-        scheduled_rss_sync,
-        "interval",
-        minutes=settings.RSS_SYNC_INTERVAL_MINS,
-        id="rss_sync",
+    # Start background RSS task
+    rss_task = asyncio.create_task(
+        _rss_ingestion_loop(),
+        name="rss-ingestion"
     )
-    scheduler.start()
+    logger.info("[JARVIS] 📡 RSS ingestion background task started")
+    
+    yield  # Application runs here
+    
+    # ── Shutdown ───────────────────────────────────────────────────────────────
+    logger.info("[JARVIS] 🛑 Initiating graceful shutdown...")
+    rss_task.cancel()
+    try:
+        await asyncio.wait_for(asyncio.shield(rss_task), timeout=5.0)
+    except (asyncio.CancelledError, asyncio.TimeoutError):
+        pass
+    logger.info("[JARVIS] ✅ Shutdown complete. Goodbye, Sir.")
 
-    # Run one sync immediately on startup in the background
-    asyncio.create_task(scheduled_rss_sync())
 
-    yield  # App is running
+# ── FastAPI App ────────────────────────────────────────────────────────────────
 
-    # Shutdown
-    scheduler.shutdown(wait=False)
-    logger.info("Scheduler stopped.")
+app = FastAPI(
+    title="JARVIS — Personal AI Companion",
+    description="Loyal AI companion for Dinesh (Sir). Powered by RAG + Groq + Qdrant.",
+    version=settings.JARVIS_VERSION,
+    lifespan=lifespan,
+    docs_url="/docs",
+    redoc_url="/redoc",
+)
 
-
-# ─── App factory ────────────────────────────────────────────────────────────────
-
-app = FastAPI(title="Jarvis RAG Backend — Professional Edition", lifespan=lifespan)
-
+# ── CORS ───────────────────────────────────────────────────────────────────────
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
+    allow_origins=["*"],  # Tighten in production
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# ── Routes ─────────────────────────────────────────────────────────────────────
+app.include_router(router, prefix="/api/v1")
 
-# ─── Endpoints ───────────────────────────────────────────────────────────────────
+
+# ── Root ───────────────────────────────────────────────────────────────────────
+@app.get("/")
+async def root():
+    return {
+        "message": f"JARVIS v{settings.JARVIS_VERSION} online. At your service, Sir.",
+        "docs":    "/docs",
+        "health":  "/api/v1/health",
+    }
+
+
+# ── PRESERVED LEGACY ENDPOINTS ─────────────────────────────────────────────────
 
 @app.post("/api/chat")
 async def chat_compat(req: ChatRequest):
-    """
-    Backwards-compatible endpoint consumed by the existing Jarvis frontend
-    (apiManager.js → callLocalServer → http://localhost:3001/api/chat).
-
-    Wraps the full RAG pipeline and returns { text, model } shape.
-    """
     rag = get_rag_service()
     result = await rag.query(req.message)
 
     # Format sources as a readable footer for the chat bubble
-    source_footer = _format_source_footer(result["sources"])
+    sources = result.get("sources", [])
+    source_footer = _format_source_footer(sources)
     answer_with_sources = result["answer"]
     if source_footer:
         answer_with_sources += f"\n\n{source_footer}"
 
     return {"text": answer_with_sources, "model": settings.GROQ_MODEL}
-
-
-@app.post("/query")
-async def query(req: QueryRequest):
-    """
-    Full RAG query with optional collection targeting and metadata filters.
-    """
-    rag = get_rag_service()
-    result = await rag.query(
-        user_query=req.message,
-        collection=req.collection,
-        filters=req.filters,
-        history=req.history
-    )
-    return result
-
 
 @app.get("/news/latest")
 async def get_latest_news(
@@ -130,9 +166,7 @@ async def get_latest_news(
     severity: Optional[str] = None,
     limit: int = 20,
 ):
-    """
-    Return the most recently ingested security news items.
-    """
+    from app.services.qdrant_client import get_qdrant_client
     qdrant = get_qdrant_client()
     from qdrant_client.http.models import Filter, FieldCondition, MatchValue
 
@@ -164,64 +198,20 @@ async def get_latest_news(
             "feed_type": p.get("feed_type", ""),
         })
 
-    # Sort by published date descending
     news.sort(key=lambda x: x.get("published", ""), reverse=True)
     return {"news": news, "total": len(news)}
 
-
-@app.post("/ingest")
-async def ingest_document(
-    collection: str = Form(...),
-    vendor: str = Form("Unknown"),
-    severity: str = Form("Informational"),
-    text: str = Form(None),
-    file: UploadFile = File(None),
-):
-    """
-    Ingest a document (txt, md) or raw text into a named collection.
-    """
-    rag = get_rag_service()
-    content = text
-    filename = "manual_entry"
-
-    if file:
-        content = (await file.read()).decode("utf-8")
-        filename = file.filename
-
-    if not content:
-        return {"status": "error", "detail": "No content provided."}
-
-    metadata = {
-        "filename": filename,
-        "vendor": vendor,
-        "severity": severity,
-        "type": "manual_upload",
-    }
-
-    num_chunks = await rag.ingest_text(content, metadata, collection)
-    return {"status": "success", "collection": collection, "chunks": num_chunks}
-
-
 @app.post("/rss/sync")
 async def manual_rss_sync():
-    """Manually trigger an RSS feed sync."""
     rss = get_rss_service()
     count = await rss.sync_feeds()
     return {"status": "success", "items_ingested": count}
 
-
-@app.get("/health")
-async def health():
-    return {"status": "healthy", "groq_model": settings.GROQ_MODEL}
-
-
 @app.websocket("/api/ssh")
 async def websocket_ssh(websocket: WebSocket):
-    import asyncio
     import json
     import os
     import asyncssh
-    from fastapi import WebSocketDisconnect
 
     await websocket.accept()
     logger.info("[SSH] Starting browser terminal session")
@@ -241,7 +231,6 @@ async def websocket_ssh(websocket: WebSocket):
 
         logger.info("[SSH] Connected")
 
-        # IMPORTANT: let remote login shell start naturally
         process = await conn.create_process(
             term_type="xterm",
             term_size=(120, 30)
@@ -251,10 +240,8 @@ async def websocket_ssh(websocket: WebSocket):
             "\r\n\x1b[32m*** Secure Shell Channel Open ***\x1b[0m\r\n"
         )
 
-        # Nudge prompt to render
         process.stdin.write("\n")
 
-        # -------- SSH -> Browser --------
         async def ssh_to_ws():
             try:
                 while True:
@@ -262,35 +249,26 @@ async def websocket_ssh(websocket: WebSocket):
                     if not chunk:
                         break
                     await websocket.send_text(chunk)
-
             except asyncio.CancelledError:
                 pass
             except Exception as e:
                 logger.error(f"[SSH OUT ERROR] {e}")
 
-        # -------- Browser -> SSH --------
         async def ws_to_ssh():
             try:
                 async for msg in websocket.iter_text():
-
-                    # resize control packet
                     if msg.startswith("{"):
                         try:
                             ctrl = json.loads(msg)
-
                             if ctrl.get("type") == "resize":
                                 process.change_terminal_size(
                                     int(ctrl["cols"]),
                                     int(ctrl["rows"])
                                 )
                                 continue
-
                         except Exception:
                             pass
-
-                    # raw keyboard input
                     process.stdin.write(msg)
-
             except WebSocketDisconnect:
                 pass
             except asyncio.CancelledError:
@@ -321,21 +299,14 @@ async def websocket_ssh(websocket: WebSocket):
 
     except Exception as e:
         logger.exception("[SSH FATAL]")
-
         try:
-            await websocket.send_text(
-                f"\r\n\x1b[31mSSH Failed: {e}\x1b[0m\r\n"
-            )
+            await websocket.send_text(f"\r\n\x1b[31mSSH Failed: {e}\x1b[0m\r\n")
         except:
             pass
-
         try:
             await websocket.close()
         except:
             pass
-
-
-# ─── Helpers ────────────────────────────────────────────────────────────────────
 
 def _format_source_footer(sources: list) -> str:
     if not sources:

@@ -1,43 +1,50 @@
+"""
+JARVIS Configuration
+Centralized settings with all required constants.
+"""
+
 from pydantic_settings import BaseSettings
-from functools import lru_cache
+from typing import Optional
+
 
 class Settings(BaseSettings):
-    GROQ_API_KEY: str = ""
-    GROQ_KEYS: str = ""  # Comma-separated list of keys for rotation
-    MIXEDBREAD_API_KEY: str = ""
     
-    @property
-    def groq_keys_list(self) -> list:
-        if not self.GROQ_KEYS:
-            return [self.GROQ_API_KEY] if self.GROQ_API_KEY else []
-        return [k.strip() for k in self.GROQ_KEYS.split(",") if k.strip()]
+    # ── Groq ──────────────────────────────────────────────────────────────────
+    GROQ_API_KEY:   str     = ""
+    GROQ_KEYS:      str     = ""
+    GROQ_MODEL:     str     = "llama-3.3-70b-versatile"
     
-    QDRANT_HOST: str = "localhost"
-    QDRANT_PORT: int = 6333
-    QDRANT_URL: str = ""
-    QDRANT_API_KEY: str = ""
+    # ── Qdrant ────────────────────────────────────────────────────────────────
+    QDRANT_HOST:    str     = "qdrant"
+    QDRANT_PORT:    int     = 6333
+    QDRANT_URL:     str     = ""
+    QDRANT_API_KEY: str     = ""
+    EMBEDDING_DIM:  int     = 384
     
-    COLLECTION_PERSONAL: str = "personal_memory"
-    COLLECTION_NETWORK: str = "network_knowledge"
-    COLLECTION_VENDOR: str = "vendor_news"
-    
-    # High-quality local models for Ubuntu/Local hosting
+    # Local embedding config
     EMBEDDING_MODEL: str = "nomic-ai/nomic-embed-text-v1.5"
-    GROQ_MODEL: str = "llama-3.1-8b-instant"
-    RERANKER_MODEL: str = "BAAI/bge-reranker-base"
-    
-    # RAG Pipeline tuning
-    CHUNK_SIZE: int = 600        # in tokens
-    CHUNK_OVERLAP: int = 120     # in tokens
-    HYBRID_ALPHA: float = 0.7    # 0=pure BM25, 1=pure semantic, 0.7=balanced
-    TOP_K_RETRIEVE: int = 10     # chunks to retrieve before reranking
-    TOP_K_RERANK: int = 3        # chunks to keep after reranking
-    
-    # Scheduling
-    RSS_SYNC_INTERVAL_MINS: int = 30
+    RERANKER_MODEL: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 
-    # SSH Settings
-    SSH_HOST: str = "host.docker.internal"
+    # ── Collections ───────────────────────────────────────────────────────────
+    COLLECTION_PERSONAL:    str = "personal_memory"
+    COLLECTION_NETWORK:     str = "network_knowledge"
+    COLLECTION_VENDOR:      str = "vendor_news"
+    
+    # ── JARVIS Identity ────────────────────────────────────────────────────────
+    JARVIS_OWNER:   str     = "Dinesh"
+    JARVIS_VERSION: str     = "2.0.0"
+    
+    # ── Memory ────────────────────────────────────────────────────────────────
+    MEMORY_COLLECTION:  str     = "jarvis_memory"
+    MEMORY_MIN_SCORE:   float   = 0.45
+    MEMORY_LIMIT:       int     = 5
+
+    # ── RSS / Background ──────────────────────────────────────────────────────
+    RSS_INTERVAL_SECONDS:   int = 3600   # 1 hour
+    RSS_TIMEOUT_SECONDS:    int = 30
+    
+    # ── SSH Variables ─────────────────────────────────────────────────────────
+    SSH_HOST: str = "192.168.10.152"
     SSH_PORT: int = 22
     SSH_USER: str = "root"
     SSH_PASSWORD: str = ""
@@ -45,9 +52,7 @@ class Settings(BaseSettings):
 
     class Config:
         env_file = ".env"
+        extra = "ignore"
 
-@lru_cache()
-def get_settings():
-    return Settings()
 
-settings = get_settings()
+settings = Settings()

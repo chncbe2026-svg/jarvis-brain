@@ -1,6 +1,0 @@
-[Qdrant] Using in-memory mode (local dev). Data resets on restart.
-[Qdrant] Created collection: personal_memory
-[Qdrant] Created collection: network_knowledge
-[Qdrant] Created collection: vendor_news
-INFO:     127.0.0.1:58124 - "POST /query HTTP/1.1" 200 OK
-INFO:     127.0.0.1:63896 - "POST /api/chat HTTP/1.1" 200 OK
