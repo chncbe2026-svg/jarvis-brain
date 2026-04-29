@@ -8,6 +8,7 @@ RUN apt-get update && apt-get install -y \
     git \
     openssh-client \
     sshpass \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
