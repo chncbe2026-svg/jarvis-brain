@@ -153,6 +153,64 @@ async def health_compat():
 
 # ── PRESERVED LEGACY ENDPOINTS ─────────────────────────────────────────────────
 
+class LegacyQueryRequest(BaseModel):
+    message: str
+    collection: Optional[str] = None
+    filters: Optional[Dict] = None
+    history: Optional[List[Dict]] = None
+
+@app.post("/query")
+async def legacy_query(req: LegacyQueryRequest):
+    """Backwards compatibility for apiManager.js hitting /query with 'message' instead of 'query'."""
+    from app.api.routes import QueryRequest, query_jarvis
+    from fastapi import BackgroundTasks
+    
+    new_req = QueryRequest(
+        query=req.message,
+        collection=req.collection,
+        filters=req.filters,
+        history=req.history
+    )
+    rag = get_rag_service()
+    # Execute query_jarvis but extract just the dictionary to return directly
+    result = await rag.query(
+        user_query=new_req.query,
+        collection=new_req.collection,
+        filters=new_req.filters,
+        history=new_req.history
+    )
+    return result
+
+@app.post("/ingest")
+async def legacy_ingest(
+    collection: str = Form(...),
+    vendor: str = Form("Unknown"),
+    severity: str = Form("Informational"),
+    text: str = Form(None),
+    file: UploadFile = File(None),
+):
+    """Backwards compatibility for apiManager.js sending FormData to /ingest."""
+    rag = get_rag_service()
+    content = text
+    filename = "manual_entry"
+
+    if file:
+        content = (await file.read()).decode("utf-8")
+        filename = file.filename
+
+    if not content:
+        return {"status": "error", "detail": "No content provided."}
+
+    metadata = {
+        "filename": filename,
+        "vendor": vendor,
+        "severity": severity,
+        "type": "manual_upload",
+    }
+
+    num_chunks = await rag.ingest_text(content, metadata, collection)
+    return {"status": "success", "collection": collection, "chunks": num_chunks}
+
 @app.post("/api/chat")
 async def chat_compat(req: ChatRequest):
     rag = get_rag_service()
