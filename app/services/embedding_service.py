@@ -10,11 +10,12 @@ class EmbeddingService:
     def __init__(self):
         # Using high-quality Nomic model for local/Ubuntu hosting
         logger.info(f"Loading local embedding model: {settings.EMBEDDING_MODEL}")
-        self.model = TextEmbedding(settings.EMBEDDING_MODEL)
+        # Explicitly setting threads=1 to avoid pthread_setaffinity_np errors on some Docker hosts
+        self.model = TextEmbedding(settings.EMBEDDING_MODEL, threads=1)
         
         # Load the Reranker locally since we have enough RAM on Ubuntu
         logger.info(f"Loading local reranker model: {settings.RERANKER_MODEL}")
-        self.reranker = TextCrossEncoder(settings.RERANKER_MODEL)
+        self.reranker = TextCrossEncoder(settings.RERANKER_MODEL, threads=1)
 
     def embed_query(self, query: str) -> List[float]:
         """Embed a single query for searching."""
