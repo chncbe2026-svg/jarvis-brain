@@ -143,6 +143,13 @@ async def root():
         "health":  "/api/v1/health",
     }
 
+@app.get("/health")
+async def health_compat():
+    """Backwards compatible health check for legacy docker-compose and monitoring."""
+    from app.api.routes import health_check
+    from app.services.rag_service import get_rag_service
+    return await health_check(get_rag_service())
+
 
 # ── PRESERVED LEGACY ENDPOINTS ─────────────────────────────────────────────────
 
