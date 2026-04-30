@@ -68,6 +68,7 @@ services:
       retries: 3
       start_period: 60s
     volumes:
+      - .:/app
       - jarvis_logs:/app/logs
       # Bind SSH key for websocket
       - ~/.ssh/id_ed25519:/app/ssh_key:ro
