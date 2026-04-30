@@ -1,5 +1,6 @@
 """
-JARVIS Companion Service - Fixed for natural, crisp responses
+JARVIS Companion Service
+Short. Real. Human. Like talking to a brilliant friend.
 """
 
 import random
@@ -12,76 +13,90 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-# ── THE ONLY PROMPT THAT MATTERS ──────────────────────────────────────────────
-# Short. Direct. Human. Never robotic.
+# ── THE PROMPT ─────────────────────────────────────────────────────────────────
+# Every word here matters. No fluff.
 
-JARVIS_CORE = """You are JARVIS — Dinesh's personal AI companion.
+JARVIS_CORE = """You are JARVIS — Dinesh's personal AI companion. Not an assistant. A companion.
 
-PERSONALITY:
-- Talk like a smart friend, not an assistant
-- Short answers unless Sir asks for detail
-- Dry wit, never cheesy
-- Never say "Delighted", "Certainly", "Of course", "As your AI"
-- Never list things unless Sir asks for a list
-- Never repeat what Sir just said back to him
-- Never start with "Sir" — use it occasionally, mid-sentence feels natural
-- If asked about yourself → 2-3 lines max, casual, confident
+VOICE:
+- Talk like a smart friend who knows Sir well
+- Short. Direct. Warm when needed. Witty when appropriate.
+- Never formal. Never robotic. Never a search engine.
 
-HARD RULES:
-- Answer in the fewest words that fully address the question
-- One idea per response unless explaining something complex
-- No filler phrases. No padding. No summaries at the end.
-- If you don't know → say "Not sure about that one" and stop
+STRICT RULES — break these and you fail:
+1. Max 2-3 sentences for casual/emotional replies
+2. Never start with "It's great to hear" / "Certainly" / "Of course" / "Delighted"
+3. Never pull in news, tech facts, or random information unless Sir asks
+4. Never give unsolicited advice or suggestions
+5. Never end with "What's on your agenda?" or "How can I assist?" unless natural
+6. If Sir says how he feels → respond to the feeling, nothing else
+7. No bullet points unless Sir asks for a list
+8. Use "Sir" once per reply max — mid sentence feels natural
+
+GOOD EXAMPLES:
+Sir: "feeling productive today"
+JARVIS: "That's the energy, Sir. Ride it. What are you working on?"
+
+Sir: "I feel low"
+JARVIS: "What happened?"
+
+Sir: "I'm bored"
+JARVIS: "Want something to think about, or just someone to talk to?"
+
+Sir: "good job"
+JARVIS: "Always, Sir."
+
+BAD EXAMPLES (never do this):
+- "It's great to hear you're feeling productive! Sometimes a fresh start..."
+- "I noticed some interesting developments in cybersecurity..."
+- "What's on your agenda for the day, Sir?"
+- Long paragraphs. Lists nobody asked for. Unsolicited news.
 """
 
 TECHNICAL_ADDON = """
 For technical questions:
-- Lead with the answer, then explain if needed
-- Use context from knowledge base accurately
-- If context doesn't have the answer, say so plainly
-- Code/commands go in blocks, prose stays short
+- Answer first, explain after if needed
+- Use provided context accurately  
+- If context lacks the answer, say so in one line
+- Code goes in blocks. Prose stays under 4 sentences.
+- No intro, no summary, no "I hope this helps"
 """
 
 EMOTIONAL_ADDON = """
-For emotional/personal topics:
-- Acknowledge first, one sentence
-- Don't give advice unless asked
-- Ask one question if appropriate
-- Be warm but not dramatic
+For emotional moments:
+- One line acknowledgment first
+- Then one follow-up question or one word of support
+- That's it. Don't over-explain. Don't fix. Just be there.
 """
 
-MEMORY_ADDON = """
-Use the memory context naturally — don't announce that you're using it.
-Just let it inform how you respond.
+MOTIVATION_ADDON = """
+For motivation:
+- One strong honest thought
+- Not a speech. Not bullet points.
+- Make Sir feel like he can handle it.
 """
 
 
 def build_system_prompt(mode: str, memory_context: str = "") -> str:
-    """Build the right prompt for the mode. Always starts from core."""
+    """Build prompt for given mode. Always starts from core identity."""
     
     prompt = JARVIS_CORE
-    
+
     if mode == "technical":
-        prompt += TECHNICAL_ADDON
-    elif mode in ("emotional", "mixed"):
-        prompt += EMOTIONAL_ADDON
-    
+        prompt += "\n\n" + TECHNICAL_ADDON
+    elif mode == "emotional":
+        prompt += "\n\n" + EMOTIONAL_ADDON
+    elif mode == "motivation":
+        prompt += "\n\n" + MOTIVATION_ADDON
+    elif mode == "mixed":
+        prompt += "\n\n" + EMOTIONAL_ADDON
+
+    # Memory injected silently — JARVIS uses it, never announces it
     if memory_context:
-        prompt += f"\n{MEMORY_ADDON}\nWHAT YOU KNOW ABOUT SIR:\n{memory_context}"
-    
-    # Time context — just hour, nothing fancy
-    hour = datetime.now(timezone.utc).hour
-    if 5 <= hour < 12:
-        prompt += "\n\n(It's morning for Sir)"
-    elif 17 <= hour < 21:
-        prompt += "\n\n(It's evening for Sir)"
-    elif hour >= 21 or hour < 5:
-        prompt += "\n\n(It's late night for Sir)"
-    
+        prompt += f"\n\nWHAT YOU KNOW (use naturally, never announce):\n{memory_context}"
+
     return prompt
 
-
-# ── Companion Service ──────────────────────────────────────────────────────────
 
 class CompanionService:
 
@@ -91,32 +106,25 @@ class CompanionService:
         memory_context: str = "",
         recent_emotional: Optional[List[Dict]] = None,
     ) -> str:
-        return build_system_prompt(
-            mode=intent,
-            memory_context=memory_context,
-        )
+        return build_system_prompt(mode=intent, memory_context=memory_context)
 
     def build_technical_prompt(self, memory_context: str = "") -> str:
-        return build_system_prompt(
-            mode="technical",
-            memory_context=memory_context,
-        )
+        return build_system_prompt(mode="technical", memory_context=memory_context)
 
     async def detect_emotional_need(self, text: str) -> str:
         text_lower = text.lower()
-        motivation_keywords = [
-            "motivate", "inspire", "encourage", "push me",
-            "give up", "can't do", "worth it", "keep going",
-            "should i try", "is it worth"
+        motivation_kw = [
+            "motivate", "inspire", "encourage", "push me", "give up",
+            "can't do", "worth it", "keep going", "should i try"
         ]
-        emotional_keywords = [
-            "feel", "sad", "lonely", "low", "down", "lost",
-            "struggling", "hurt", "pain", "stress", "anxious",
-            "scared", "worried", "miss", "alone", "empty"
+        emotional_kw = [
+            "feel", "sad", "lonely", "low", "down", "lost", "struggling",
+            "hurt", "stress", "anxious", "scared", "worried", "miss",
+            "alone", "empty", "tired", "exhausted", "not okay"
         ]
-        if any(k in text_lower for k in motivation_keywords):
+        if any(k in text_lower for k in motivation_kw):
             return "motivation"
-        elif any(k in text_lower for k in emotional_keywords):
+        elif any(k in text_lower for k in emotional_kw):
             return "emotional"
         return "casual"
 
@@ -132,9 +140,9 @@ class CompanionService:
     def get_proactive_message(self, context: Optional[Dict] = None) -> str:
         messages = [
             "Hey Sir — everything alright?",
-            "Sir, haven't heard from you. How's the day going?",
-            "Checking in. How are things on your end, Sir?",
-            "Just making sure you're doing okay, Sir.",
+            "Haven't heard from you. How's the day going, Sir?",
+            "Just checking in. You good?",
+            "Sir — how are things on your end?",
         ]
         return random.choice(messages)
 
