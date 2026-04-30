@@ -15,7 +15,9 @@ from datetime import datetime, timezone
 from app.services.rag_service import get_rag_service, RAGService
 from app.services.memory_service import memory_service, MemoryType
 from app.services.intent_router import detect_intent
+from app.services.notification_service import NotificationService
 import logging
+import asyncio
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -54,6 +56,22 @@ class MemoryRecallRequest(BaseModel):
 
 class IntentCheckRequest(BaseModel):
     text: str
+
+class NotificationTriggerRequest(BaseModel):
+    user_name: str
+    plan_name: str
+    amount: str
+    subscription_id: str
+    transaction_id: str
+    date: str
+    email: Optional[str] = None
+    telegram: bool = True
+
+class RepeatingNotificationRequest(BaseModel):
+    user_name: str
+    plan_name: str
+    interval_seconds: int
+    count: int = 3
 
 
 # ── Core Query Endpoint (Preserved) ───────────────────────────────────────────
@@ -191,6 +209,50 @@ async def inspect_intent(request: IntentCheckRequest):
     }
 
 
+# ── Notification Endpoints ────────────────────────────────────────────────────
+
+@router.post("/notifications/trigger")
+async def trigger_notification(request: NotificationTriggerRequest):
+    """Trigger a one-time subscription notification via Email and Telegram."""
+    details = request.dict()
+    results = {}
+    
+    if request.email:
+        email_body = NotificationService.get_subscription_email_template(details)
+        results["email"] = await NotificationService.send_email(
+            to_email=request.email,
+            subject=f"Subscription Confirmed: {request.plan_name}",
+            body=email_body
+        )
+        
+    if request.telegram:
+        telegram_msg = NotificationService.get_subscription_telegram_template(details)
+        results["telegram"] = await NotificationService.send_telegram(telegram_msg)
+        
+    return {
+        "status": "completed",
+        "results": results,
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    }
+
+@router.post("/notifications/repeating")
+async def trigger_repeating_notification(request: RepeatingNotificationRequest, background_tasks: BackgroundTasks):
+    """Trigger repeating alerts for a subscription."""
+    async def repeat_task(req: RepeatingNotificationRequest):
+        for i in range(req.count):
+            msg = f"🔔 <b>Repeating Alert ({i+1}/{req.count})</b>\n\nSir, {req.user_name}'s <b>{req.plan_name}</b> subscription requires immediate attention."
+            await NotificationService.send_telegram(msg)
+            if i < req.count - 1:
+                await asyncio.sleep(req.interval_seconds)
+
+    background_tasks.add_task(repeat_task, request)
+    return {
+        "status": "scheduled", 
+        "message": f"Alert will repeat {request.count} times every {request.interval_seconds}s",
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    }
+
+
 # ── Health Endpoint (Enhanced) ────────────────────────────────────────────────
 
 @router.get("/health")
@@ -247,3 +309,11 @@ async def health_check(rag: RAGService = Depends(get_rag_service)):
         return JSONResponse(status_code=503, content=status)
 
     return status
+
+@router.post(/"notifications/monthly-trigger/")
+async def trigger_monthly_notification():
+    """Trigger the monthly service alert email from Apps Script."""
+    success = await NotificationService._call_apps_script("triggerEmailAlerts", {})
+    if success:
+        return {"status": "completed", "message": "Monthly alerts dispatched"}
+    raise HTTPException(status_code=500, detail="Failed to trigger monthly alerts")

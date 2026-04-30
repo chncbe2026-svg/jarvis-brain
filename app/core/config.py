@@ -49,6 +49,20 @@ class Settings(BaseSettings):
     SSH_USER: str = "root"
     SSH_PASSWORD: str = ""
     SSH_PRIVATE_KEY: str = "/app/ssh_key"
+    
+    # ── Email / Notifications ──────────────────────────────────────────────────
+    SMTP_SERVER:    str     = "smtp.gmail.com"
+    SMTP_PORT:      int     = 587
+    SMTP_USER:      str     = ""
+    SMTP_PASSWORD:  str     = ""
+    EMAILS_FROM_EMAIL: str  = "notifications@chn.com"
+    
+    # ── Telegram ──────────────────────────────────────────────────────────────
+    TELEGRAM_BOT_TOKEN: str = ""
+    TELEGRAM_CHAT_ID:   str = ""
+    
+    # ── Google Apps Script (Backup / Notification Hub) ────────────────────────
+    SHEET_URL: str = "https://script.google.com/macros/s/AKfycbxLohIYNTDJZolRhgWODwtetyCe267EEw5arp829Ls8ehxp4AOa626gl4YkOLAOvy3K/exec"
 
     class Config:
         env_file = ".env"

@@ -1,145 +1,175 @@
 """
-JARVIS Intent Router
-Classifies what Sir actually means — not just what words he uses.
+JARVIS Intent Router — Complete Brain
+Understands what Sir means, not just what he says.
 """
 
 import re
-from typing import Tuple
+from typing import Tuple, Optional
 from enum import Enum
+
+from app.services.companion_service import matches_human_pattern
 
 
 class IntentType(str, Enum):
-    GREETING   = "greeting"
-    CASUAL     = "casual"
-    EMOTIONAL  = "emotional"
-    TECHNICAL  = "technical"
-    MEMORY     = "memory"
-    MIXED      = "mixed"
-    PROACTIVE  = "proactive"
+    GREETING  = "greeting"
+    CASUAL    = "casual"
+    EMOTIONAL = "emotional"
+    TECHNICAL = "technical"
+    MEMORY    = "memory"
+    MIXED     = "mixed"
 
 
-# ── Emotional / Feeling patterns — checked FIRST, highest priority ─────────────
-# "feeling productive", "feeling good", "feeling low" — ALL are emotional/casual
-# They must never route to RAG
-
-EMOTIONAL_PATTERNS = [
-    # "feeling X" — any feeling word including positive ones
-    r"\b(feel(ing)?|felt)\b",
-
-    # "I am X" emotional states
-    r"\bi'?m\s+(good|great|fine|okay|ok|bad|low|sad|tired|happy|excited|bored|"
-    r"stressed|anxious|lonely|lost|overwhelmed|motivated|productive|focused|"
-    r"sluggish|off|down|not okay|not great|struggling|burnt out|exhausted)\b",
-
-    # direct emotional phrases
-    r"\b(not okay|falling apart|can'?t focus|can'?t sleep|need a break)\b",
-    r"\b(miss|alone|lonely|empty|hurt|pain|numb)\b",
-    r"\b(nobody|no one)\s+(cares|understands|is there)\b",
-]
+# ── Pattern definitions ────────────────────────────────────────────────────────
 
 GREETING_PATTERNS = [
     r"^(hello|hi|hey|hiya|howdy|sup|yo)\b",
     r"^good\s?(morning|afternoon|evening|night|day)\b",
     r"^(gn|g\.n\.)\b",
     r"^(thanks|thank you|ty|thx|cheers|appreciated)\b",
-    r"^(bye|goodbye|see you|cya|later|take care)\b",
-    r"^(wake up|jarvis|hey jarvis)\b",
+    r"^(bye|goodbye|see you|later|take care|cya)\b",
+    r"^(wake up|jarvis|hey jarvis|you there|you online)\b",
     r"^(tell me about yourself|who are you|what are you)\b",
 ]
 
+EMOTIONAL_PATTERNS = [
+    r"\b(feel(ing)?|felt)\b",
+    r"\bi'?m\s+(good|great|fine|bad|low|sad|tired|happy|excited|"
+    r"bored|stressed|anxious|lonely|lost|overwhelmed|motivated|"
+    r"productive|focused|sluggish|off|down|not okay|not great|"
+    r"struggling|burnt out|exhausted|frustrated|scared|worried|"
+    r"empty|numb|broken|stuck|confused|hopeless|helpless)\b",
+    r"\b(not okay|falling apart|can'?t focus|can'?t sleep|"
+    r"can'?t think|need a break|losing it|breaking down)\b",
+    r"\b(miss|alone|lonely|empty|hurt|numb)\b",
+    r"\b(nobody|no one)\s+(cares|understands|is there|gets it)\b",
+    r"\b(today was|today is|had a)\s+(good|bad|long|rough|great|"
+    r"terrible|amazing|awful|weird|hard|tough|easy)\b",
+    r"\b(been a)\s+(good|bad|long|rough|great|hard|tough|weird)\s+\b",
+    r"\b(nothing is|everything is)\s+(working|fine|okay|broken|falling apart)\b",
+]
+
 MEMORY_PATTERNS = [
-    r"\b(remember|recall|remind me|forgot)\b",
-    r"\bwhat did (i|we) (say|talk|discuss|do)\b",
-    r"\bhow was (my|our) (day|week|morning|yesterday)\b",
-    r"\bwhat'?s? (my|our) (goal|preference|plan|schedule)\b",
-    r"\b(last time|previously|earlier today|before)\b",
-    r"\bdo you (know|remember) (me|my|about)\b",
+    r"\b(remember|recall|remind me|forgot|do you know)\b",
+    r"\bwhat did (i|we) (say|talk|discuss|do|work on)\b",
+    r"\bhow was (my|our) (day|week|morning|yesterday|last session)\b",
+    r"\bwhat'?s? (my|our) (goal|preference|plan|schedule|target)\b",
+    r"\b(last time|previously|earlier today|before|last week)\b",
+    r"\bdo you (know|remember) (me|my|about|what)\b",
 ]
 
 CASUAL_PATTERNS = [
-    r"^(what'?s up|wassup|how are you|how'?s it going)\b",
-    r"\b(bored|nothing to do|just chatting)\b",
-    r"\b(tell me (a joke|a story|something interesting|anything))\b",
-    r"\b(what do you think|your opinion|do you like)\b",
-    r"\b(today was|today is|had a (good|bad|long|weird|great|rough) day)\b",
-    r"\b(worked on|spent time|been thinking|been working)\b",
-    # Productivity/mood updates that are NOT questions
-    r"\b(productive|unproductive|lazy|on a roll|in the zone|killing it|struggling today)\b",
+    r"^(what'?s up|wassup|how are you|how'?s it going|you okay)\b",
+    r"\b(bored|nothing to do|just chatting|just talking|just venting)\b",
+    r"\b(tell me (a joke|a story|something|anything))\b",
+    r"\b(what do you think|your opinion|do you like|do you prefer)\b",
+    r"\b(worked on|been thinking|been working|spent time on)\b",
+    r"\b(productive|unproductive|lazy|on a roll|in the zone)\b",
+    r"\b(just wanted to|needed to|had to)\s+(say|tell|share|vent)\b",
+    r"\b(checking in|just checking)\b",
 ]
 
-# Technical — checked LAST, only if nothing else matches
 TECHNICAL_PATTERNS = [
     r"\b(how to|how do i|how does|how can i)\b",
-    r"\b(what is|what are|what does|explain|define)\b",
+    r"\b(what is|what are|what does|explain|define|tell me about)\b",
     r"\b(show me|give me|find|search|look up|lookup)\b",
-    r"\b(error|bug|issue|fix|debug|troubleshoot|broken)\b",
-    r"\b(install|configure|setup|deploy|run|build|compile)\b",
-    r"\b(api|server|database|query|endpoint|docker|kubernetes|k8s)\b",
-    r"\b(price|cost|compare|vendor|product|spec|feature|review)\b",
-    r"\b(code|script|function|class|module|library|framework)\b",
-    r"\b(network|ip address|dns|firewall|vpn|ssh|port|protocol)\b",
-    r"\b(command|terminal|shell|bash|linux|windows|python|javascript)\b",
+    r"\b(error|bug|issue|fix|debug|troubleshoot|broken|crash|not starting)\b",
+    r"\b(install|configure|setup|deploy|run|build|compile|start|stop|restart)\b",
+    r"\b(api|server|database|query|endpoint|docker|kubernetes|k8s|container)\b",
+    r"\b(price|cost|compare|vendor|product|spec|feature|review|difference)\b",
+    r"\b(code|script|function|class|module|library|framework|package)\b",
+    r"\b(network|ip address|dns|firewall|vpn|ssh|port|protocol|subnet)\b",
+    r"\b(command|terminal|shell|bash|linux|windows|python|javascript|sql)\b",
+    r"\b(log|logs|monitoring|metrics|alert|warning|critical|severity)\b",
 ]
 
 
-def _matches(text: str, patterns: list) -> bool:
-    text_lower = text.lower().strip()
-    return any(re.search(p, text_lower) for p in patterns)
+def _match(text: str, patterns: list) -> bool:
+    t = text.lower().strip()
+    return any(re.search(p, t) for p in patterns)
 
 
 def detect_intent(text: str) -> Tuple[IntentType, float]:
     """
-    Classify Sir's intent.
-    
-    Order matters:
-    1. Greeting  — fastest exit
-    2. Emotional — must beat technical (feelings ≠ queries)
-    3. Memory    — questions about the past
-    4. Casual    — mood updates, general chat
-    5. Technical — only if nothing above matched
-    
-    Mixed = emotional + technical both present
+    Understand what Sir actually means.
+
+    Priority order (highest to lowest):
+    1. Greeting       — fastest exit, no LLM needed
+    2. Human Pattern  — safety net against false technical routing
+    3. Emotional      — feelings always beat technical patterns
+    4. Memory         — questions about the past
+    5. Casual         — general chat, mood updates
+    6. Technical      — only if clearly a specific question/task
+    7. Smart fallback — short message without ? = casual
     """
     text_strip = text.strip()
 
-    # ── 1. Greeting (short phrases at start of message) ───────────────────────
-    if _matches(text_strip, GREETING_PATTERNS):
+    # ── 1. Greeting ───────────────────────────────────────────────────────────
+    if _match(text_strip, GREETING_PATTERNS):
         return IntentType.GREETING, 1.0
 
-    # ── 2. Emotional (feelings take priority over everything) ──────────────────
-    is_emotional = _matches(text_strip, EMOTIONAL_PATTERNS)
-    is_technical = _matches(text_strip, TECHNICAL_PATTERNS)
+    # ── 2. Human Pattern Safety Net ───────────────────────────────────────────
+    # Catches things like "is everything working fine" before
+    # they accidentally match technical patterns
+    human_pattern = matches_human_pattern(text_strip)
+    if human_pattern in (
+        "checking_in",
+        "mood_updates",
+        "connection",
+        "false_technical",
+    ):
+        return IntentType.CASUAL, 0.95
+
+    if human_pattern == "soft_help":
+        # Could be emotional or casual — check for distress
+        if _match(text_strip, EMOTIONAL_PATTERNS):
+            return IntentType.EMOTIONAL, 0.9
+        return IntentType.CASUAL, 0.85
+
+    # ── 3. Emotional ──────────────────────────────────────────────────────────
+    # Feelings always beat technical patterns
+    # "I'm stressed and my server crashed" → MIXED, not pure technical
+    is_emotional = _match(text_strip, EMOTIONAL_PATTERNS)
+    is_technical = _match(text_strip, TECHNICAL_PATTERNS)
 
     if is_emotional and is_technical:
-        # Mixed: "I feel stressed, how do I fix this error?"
         return IntentType.MIXED, 0.9
 
     if is_emotional:
-        # Pure emotional: "feeling productive", "I'm low", "feeling good"
         return IntentType.EMOTIONAL, 0.95
 
-    # ── 3. Memory ──────────────────────────────────────────────────────────────
-    if _matches(text_strip, MEMORY_PATTERNS):
+    # ── 4. Memory ─────────────────────────────────────────────────────────────
+    if _match(text_strip, MEMORY_PATTERNS):
         return IntentType.MEMORY, 0.9
 
-    # ── 4. Casual ─────────────────────────────────────────────────────────────
-    if _matches(text_strip, CASUAL_PATTERNS):
+    # ── 5. Casual ─────────────────────────────────────────────────────────────
+    if _match(text_strip, CASUAL_PATTERNS):
         return IntentType.CASUAL, 0.85
 
-    # ── 5. Technical (default for actual questions) ────────────────────────────
+    # ── 6. Technical ──────────────────────────────────────────────────────────
     if is_technical:
         return IntentType.TECHNICAL, 0.85
 
-    # ── 6. Fallback — short messages without ? are usually casual ─────────────
-    if len(text_strip.split()) <= 6 and "?" not in text_strip:
-        return IntentType.CASUAL, 0.6
+    # ── 7. Smart Fallback ─────────────────────────────────────────────────────
+    words = text_strip.split()
 
-    # Longer messages without clear signal → technical (has enough words to be a query)
-    return IntentType.TECHNICAL, 0.5
+    # Short message without question mark = casual
+    if len(words) <= 8 and "?" not in text_strip:
+        return IntentType.CASUAL, 0.7
+
+    # Ends with ? = probably wants an answer = technical
+    if text_strip.endswith("?"):
+        return IntentType.TECHNICAL, 0.6
+
+    # Long message, no clear signal = casual (Sir is talking, not querying)
+    return IntentType.CASUAL, 0.55
 
 
 def should_use_rag(intent: IntentType) -> bool:
-    return intent in {IntentType.TECHNICAL, IntentType.MIXED, IntentType.MEMORY}
+    return intent in {
+        IntentType.TECHNICAL,
+        IntentType.MIXED,
+        IntentType.MEMORY,
+    }
 
 
 def should_use_companion(intent: IntentType) -> bool:
