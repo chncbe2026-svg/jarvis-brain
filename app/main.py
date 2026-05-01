@@ -211,6 +211,33 @@ async def legacy_ingest(
     num_chunks = await rag.ingest_text(content, metadata, collection)
     return {"status": "success", "collection": collection, "chunks": num_chunks}
 
+
+@app.post("/upload")
+async def legacy_upload(
+    file: UploadFile = File(...),
+    destination: str = Form(default="memory"),
+    memory_type: str = Form(default="fact"),
+    importance: float = Form(default=0.8),
+    collection: str = Form(default=""),
+    rag=None,
+):
+    """
+    Root-level smart upload endpoint (legacy path for frontend compatibility).
+    Routes to /api/v1/upload internally.
+    destination=memory  → jarvis_memory (personal facts, recalled every conversation)
+    destination=rag     → RAG knowledge base (technical docs, recalled on technical queries)
+    """
+    from app.api.routes import upload_file
+    rag = get_rag_service()
+    return await upload_file(
+        file=file,
+        destination=destination,
+        memory_type=memory_type,
+        importance=importance,
+        collection=collection,
+        rag=rag,
+    )
+
 @app.post("/api/chat")
 async def chat_compat(req: ChatRequest):
     rag = get_rag_service()
