@@ -4,8 +4,8 @@ FROM python:3.11-slim
 LABEL maintainer="Dinesh"
 LABEL description="JARVIS Personal AI Companion"
 
-# Security: non-root user
-RUN groupadd -r jarvis && useradd -r -g jarvis jarvis
+# Create a system user 'jarvis' with a home directory
+RUN groupadd -r jarvis && useradd -r -m -g jarvis jarvis
 
 WORKDIR /app
 
@@ -22,6 +22,10 @@ RUN apt-get update && apt-get install -y \
 COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
+
+# Pre-create cache directories and set permissions
+RUN mkdir -p /home/jarvis/.fastembed_cache && \
+    chown -R jarvis:jarvis /home/jarvis/.fastembed_cache
 
 # Copy application code
 COPY --chown=jarvis:jarvis . .

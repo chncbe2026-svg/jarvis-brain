@@ -9,9 +9,8 @@ logger = logging.getLogger(__name__)
 class EmbeddingService:
     def __init__(self):
         # Using high-quality Nomic model for local/Ubuntu hosting
-        # Explicitly setting cache_dir to /app/.fastembed_cache to avoid issues with transient /tmp
-        # and explicitly setting threads=1 for Docker stability
-        cache_dir = "/app/.fastembed_cache"
+        # Using the home directory for cache to ensure full write permissions
+        cache_dir = "/home/jarvis/.fastembed_cache"
         self.model = TextEmbedding(settings.EMBEDDING_MODEL, threads=1, cache_dir=cache_dir)
         
         # Load the Reranker locally since we have enough RAM on Ubuntu

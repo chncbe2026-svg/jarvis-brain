@@ -70,7 +70,7 @@ services:
     volumes:
       - .:/app
       - jarvis_logs:/app/logs
-      - jarvis_cache:/app/.fastembed_cache
+      - jarvis_cache:/home/jarvis/.fastembed_cache
       # Bind SSH key for websocket
       - ~/.ssh/id_ed25519:/app/ssh_key:ro
 
