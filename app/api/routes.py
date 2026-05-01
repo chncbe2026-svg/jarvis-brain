@@ -7,7 +7,7 @@ Preserves all existing endpoints while adding:
 - Health improvements
 """
 
-from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
+from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks, UploadFile, File, Form
 from pydantic import BaseModel, Field
 from typing import Optional, Dict, Any, List
 from datetime import datetime, timezone
@@ -112,7 +112,12 @@ async def ingest_document(
     request: IngestRequest,
     rag: RAGService = Depends(get_rag_service),
 ):
-    """Ingest text into JARVIS knowledge base."""
+    """
+    Ingest text into JARVIS RAG knowledge base (technical documents).
+    ⚠️  This goes into the RAG knowledge base (vendor_news / network_knowledge / personal).
+    ⚠️  Only recalled when Sir asks TECHNICAL questions.
+    Use /memory/store for personal facts, relationships, and preferences.
+    """
     try:
         count = await rag.ingest_text(
             text=request.text,
@@ -122,11 +127,122 @@ async def ingest_document(
         return {
             "status":        "success",
             "chunks_stored": count,
-            "message":       f"Sir, {count} document(s) ingested successfully.",
+            "destination":   request.collection or "vendor_news (default)",
+            "message":       f"Sir, {count} document(s) ingested into the RAG knowledge base.",
         }
     except Exception as e:
         logger.error(f"[API] Ingest error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Smart File Upload Endpoint (NEW) ──────────────────────────────────────────
+
+@router.post("/upload")
+async def upload_file(
+    file: UploadFile = File(...),
+    destination: str = Form(default="memory"),
+    memory_type: str = Form(default="fact"),
+    importance: float = Form(default=0.8),
+    collection: str = Form(default=""),
+    rag: RAGService = Depends(get_rag_service),
+):
+    """
+    ═══════════════════════════════════════════════════════════════
+    SMART FILE UPLOAD — Choose the correct destination:
+    ═══════════════════════════════════════════════════════════════
+
+    destination=memory  →  Stores into jarvis_memory (PERSONAL)
+    ─────────────────────────────────────────────────────────────
+    Use for:
+      • Personal facts about Sir or people he knows
+      • Relationships (who is Karthikeyan, who is the manager)
+      • Preferences (Sir likes dark mode, works late nights)
+      • Goals and plans
+    memory_type options: fact | relationship | preference | goal | emotional | reminder
+    importance: 0.0 to 1.0 (use 0.9 for important facts)
+    Recalled: During EVERY conversation automatically.
+
+    destination=rag  →  Stores into RAG knowledge base (TECHNICAL)
+    ─────────────────────────────────────────────────────────────
+    Use for:
+      • Technical documentation, manuals, SOPs
+      • Network diagrams, IT procedures
+      • Vendor information, security advisories
+    collection options: personal_memory | network_knowledge | vendor_news
+    Recalled: Only when Sir asks a TECHNICAL question.
+    ═══════════════════════════════════════════════════════════════
+    """
+    try:
+        content_bytes = await file.read()
+        content = content_bytes.decode("utf-8", errors="ignore").strip()
+
+        if not content:
+            raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+
+        filename = file.filename or "uploaded_file.txt"
+
+        # ── Route to MEMORY (personal facts, relationships, etc.) ──
+        if destination == "memory":
+            # Split file by newlines — each non-empty line = one memory entry
+            lines = [l.strip() for l in content.splitlines() if l.strip()]
+
+            if not lines:
+                raise HTTPException(status_code=400, detail="No content lines found in file.")
+
+            stored = 0
+            for line in lines:
+                success = await memory_service.store(
+                    content=line,
+                    memory_type=memory_type,
+                    importance=importance,
+                    metadata={"source": filename},
+                )
+                if success:
+                    stored += 1
+
+            return {
+                "status":      "success",
+                "destination": "jarvis_memory (personal)",
+                "file":        filename,
+                "lines_stored": stored,
+                "memory_type": memory_type,
+                "importance":  importance,
+                "message":     f"Sir, {stored} memory entries stored. JARVIS will recall these in every conversation.",
+            }
+
+        # ── Route to RAG (technical knowledge base) ──
+        elif destination == "rag":
+            target_collection = collection or "vendor_news"
+            count = await rag.ingest_text(
+                text=content,
+                metadata={
+                    "title":    filename,
+                    "filename": filename,
+                    "vendor":   "Manual Upload",
+                    "text":     content,
+                },
+                collection=target_collection,
+            )
+            return {
+                "status":        "success",
+                "destination":   f"RAG knowledge base → {target_collection}",
+                "file":          filename,
+                "chunks_stored": count,
+                "message":       f"Sir, file ingested into technical knowledge base. Recalled only for technical queries.",
+            }
+
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid destination. Use 'memory' for personal facts or 'rag' for technical documents."
+            )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[API] Upload error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 
 # ── Memory Endpoints (NEW) ─────────────────────────────────────────────────────
