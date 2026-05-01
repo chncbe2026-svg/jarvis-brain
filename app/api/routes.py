@@ -23,6 +23,79 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+# ── Smart Memory File Parser ───────────────────────────────────────────────────
+
+def _parse_memory_file(content: str) -> list[tuple[str, str]]:
+    """
+    Parses structured memory injection files into (tag, content) pairs.
+
+    Supports two formats:
+
+    Format 1 — [TAG] block style (preferred):
+    ─────────────────────────────────────────
+        [IDENTITY] Name: Karthikeyan B Role: Executive Director
+        [REPORTING STRUCTURE] Dinesh reports directly to Karthikeyan B.
+
+    Format 2 — Plain lines (fallback):
+    ─────────────────────────────────────────
+        Sir prefers working late at night
+        Karthikeyan manages the CHN group
+
+    Returns: list of (tag, content_text) tuples
+    """
+    import re
+
+    entries = []
+    lines = content.splitlines()
+
+    # Detect if file uses [TAG] block format
+    has_tags = any(re.match(r'^\[.+?\]', line.strip()) for line in lines)
+
+    if has_tags:
+        current_tag = ""
+        current_lines = []
+
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+
+            tag_match = re.match(r'^\[(.+?)\]\s*(.*)', line)
+            if tag_match:
+                # Save previous block
+                if current_lines:
+                    block = " ".join(current_lines).strip()
+                    if block:
+                        entries.append((current_tag, block))
+                current_tag = tag_match.group(1).strip()
+                rest = tag_match.group(2).strip()
+                current_lines = [rest] if rest else []
+            else:
+                current_lines.append(line)
+
+        # Save last block
+        if current_lines:
+            block = " ".join(current_lines).strip()
+            if block:
+                entries.append((current_tag, block))
+
+    else:
+        # Fallback: group by blank-line-separated paragraphs
+        paragraph = []
+        for line in lines:
+            stripped = line.strip()
+            if stripped:
+                paragraph.append(stripped)
+            else:
+                if paragraph:
+                    entries.append(("fact", " ".join(paragraph)))
+                    paragraph = []
+        if paragraph:
+            entries.append(("fact", " ".join(paragraph)))
+
+    return entries
+
+
 # ── Request / Response Models ──────────────────────────────────────────────────
 
 class QueryRequest(BaseModel):
@@ -183,31 +256,49 @@ async def upload_file(
 
         # ── Route to MEMORY (personal facts, relationships, etc.) ──
         if destination == "memory":
-            # Split file by newlines — each non-empty line = one memory entry
-            lines = [l.strip() for l in content.splitlines() if l.strip()]
+            entries = _parse_memory_file(content)
 
-            if not lines:
-                raise HTTPException(status_code=400, detail="No content lines found in file.")
+            if not entries:
+                raise HTTPException(status_code=400, detail="No content found in file.")
+
+            # Map [TAG] names to proper memory_type
+            tag_to_type = {
+                "IDENTITY":           "fact",
+                "SUMMARY":            "fact",
+                "SKILLS":             "fact",
+                "EXPERIENCE":         "fact",
+                "EDUCATION":          "fact",
+                "REPORTING STRUCTURE":"relationship",
+                "SYSTEM NOTES":       "fact",
+                "PREFERENCE":         "preference",
+                "GOAL":               "goal",
+                "RELATIONSHIP":       "relationship",
+                "REMINDER":           "reminder",
+                "EMOTIONAL":          "emotional",
+            }
 
             stored = 0
-            for line in lines:
+            for tag, block_content in entries:
+                resolved_type = tag_to_type.get(tag.upper(), memory_type)
+                full_entry = f"[{tag}] {block_content}" if tag else block_content
                 success = await memory_service.store(
-                    content=line,
-                    memory_type=memory_type,
+                    content=full_entry,
+                    memory_type=resolved_type,
                     importance=importance,
-                    metadata={"source": filename},
+                    metadata={"source": filename, "tag": tag},
                 )
                 if success:
                     stored += 1
 
             return {
-                "status":      "success",
-                "destination": "jarvis_memory (personal)",
-                "file":        filename,
-                "lines_stored": stored,
-                "memory_type": memory_type,
-                "importance":  importance,
-                "message":     f"Sir, {stored} memory entries stored. JARVIS will recall these in every conversation.",
+                "status":        "success",
+                "destination":   "jarvis_memory (personal)",
+                "file":          filename,
+                "blocks_stored": stored,
+                "memory_type":   memory_type,
+                "importance":    importance,
+                "message":       f"Sir, {stored} memory blocks stored. JARVIS will recall these in every conversation.",
+
             }
 
         # ── Route to RAG (technical knowledge base) ──
