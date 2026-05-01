@@ -31,10 +31,11 @@ services:
     ports:
       - "8000:8000"
     environment:
-      # Groq — provide one or multiple comma-separated keys
+      # Groq & HuggingFace
       GROQ_API_KEY:     ${GROQ_API_KEY}
       GROQ_KEYS:        ${GROQ_KEYS:-}
       GROQ_MODEL:       ${GROQ_MODEL:-llama-3.3-70b-versatile}
+      HF_TOKEN:         ${HF_TOKEN:-}
       
       # Qdrant
       QDRANT_HOST:      qdrant
