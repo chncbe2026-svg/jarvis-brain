@@ -9,9 +9,10 @@ logger = logging.getLogger(__name__)
 class EmbeddingService:
     def __init__(self):
         # Using high-quality Nomic model for local/Ubuntu hosting
-        logger.info(f"Loading local embedding model: {settings.EMBEDDING_MODEL}")
-        # Explicitly setting threads=1 to avoid pthread_setaffinity_np errors on some Docker hosts
-        self.model = TextEmbedding(settings.EMBEDDING_MODEL, threads=1)
+        # Explicitly setting cache_dir to /app/.fastembed_cache to avoid issues with transient /tmp
+        # and explicitly setting threads=1 for Docker stability
+        cache_dir = "/app/.fastembed_cache"
+        self.model = TextEmbedding(settings.EMBEDDING_MODEL, threads=1, cache_dir=cache_dir)
         
         # Load the Reranker locally since we have enough RAM on Ubuntu
         logger.info(f"Loading local reranker model: {settings.RERANKER_MODEL}")
@@ -22,7 +23,7 @@ class EmbeddingService:
             reranker_model = "Xenova/ms-marco-MiniLM-L-6-v2"
             
         try:
-            self.reranker = TextCrossEncoder(reranker_model, threads=1)
+            self.reranker = TextCrossEncoder(reranker_model, threads=1, cache_dir=cache_dir)
         except ValueError:
             logger.warning(f"Reranker {reranker_model} not supported, falling back to BAAI/bge-reranker-base")
             self.reranker = TextCrossEncoder("BAAI/bge-reranker-base", threads=1)
