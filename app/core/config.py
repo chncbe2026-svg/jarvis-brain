@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     QDRANT_PORT:    int     = 6333
     QDRANT_URL:     str     = ""
     QDRANT_API_KEY: str     = ""
-    EMBEDDING_DIM:  int     = 384
+    EMBEDDING_DIM:  int     = 768
     
     # Local embedding config
     EMBEDDING_MODEL: str = "nomic-ai/nomic-embed-text-v1.5"

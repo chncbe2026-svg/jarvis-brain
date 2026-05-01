@@ -40,7 +40,7 @@ services:
       # Qdrant
       QDRANT_HOST:      qdrant
       QDRANT_PORT:      6333
-      EMBEDDING_DIM:    384
+      EMBEDDING_DIM:    768
       
       # Collections
       COLLECTION_PERSONAL:  personal_memory
