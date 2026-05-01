@@ -106,7 +106,7 @@ class MemoryService:
         query: str,
         memory_types: Optional[List[str]] = None,
         limit: int = 5,
-        min_score: float = 0.45,
+        min_score: float = 0.35,
     ) -> List[Dict[str, Any]]:
         """
         Retrieve relevant memories for a given query.

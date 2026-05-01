@@ -49,7 +49,7 @@ EMOTIONAL_PATTERNS = [
 ]
 
 MEMORY_PATTERNS = [
-    r"\b(remember|recall|remind me|forgot|do you know)\b",
+    r"\b(remember|recall|remind me|forgot|do you know|who is|tell me about)\b",
     r"\bwhat did (i|we) (say|talk|discuss|do|work on)\b",
     r"\bhow was (my|our) (day|week|morning|yesterday|last session)\b",
     r"\bwhat'?s? (my|our) (goal|preference|plan|schedule|target)\b",
@@ -70,7 +70,7 @@ CASUAL_PATTERNS = [
 
 TECHNICAL_PATTERNS = [
     r"\b(how to|how do i|how does|how can i)\b",
-    r"\b(what is|what are|what does|explain|define|tell me about)\b",
+    r"\b(what is|who is|what are|what does|explain|define|tell me about)\b",
     r"\b(show me|give me|find|search|look up|lookup)\b",
     r"\b(error|bug|issue|fix|debug|troubleshoot|broken|crash|not starting)\b",
     r"\b(install|configure|setup|deploy|run|build|compile|start|stop|restart)\b",
