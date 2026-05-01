@@ -22,6 +22,9 @@ from app.services.intent_router import detect_intent, should_use_rag, should_use
 from app.services.memory_service import memory_service, MemoryType
 from app.services.companion_service import companion_service
 from app.services.shortcut_service import get_shortcut_response
+from app.services.web_search_service import (
+    web_search, format_results_for_llm, is_web_search_query, extract_search_query
+)
 from qdrant_client.http import models
 import logging
 
@@ -179,6 +182,12 @@ class RAGService:
         7. Return structured response
         """
         logger.info(f"[JARVIS] 💬 Query: {user_query[:80]}...")
+
+        # ── Step 0: Web Search Detection (before any other routing) ──────────
+        if is_web_search_query(user_query):
+            return await self._handle_web_search(
+                user_query=user_query,
+            )
 
         # ── Step 1: Shortcut Check (fastest path) ────────────────────────────
         shortcut = get_shortcut_response(user_query)
@@ -343,6 +352,89 @@ class RAGService:
             "sources": sources,
             "intent":  "technical",
             "mode":    "rag",
+        }
+
+    async def _handle_web_search(
+        self,
+        user_query: str,
+    ) -> Dict[str, Any]:
+        """
+        Handle web search requests.
+        1. Extract clean search terms from the query
+        2. Fetch real results from DuckDuckGo
+        3. Feed results to LLM for a JARVIS-style summarized answer
+        4. Auto-store findings into JARVIS memory so he "learns"
+        """
+        logger.info(f"[WebSearch] 🌐 Web search triggered: {user_query}")
+
+        # Extract clean search query
+        search_terms = extract_search_query(user_query)
+        logger.info(f"[WebSearch] 🔍 Searching for: '{search_terms}'")
+
+        # Fetch results
+        results = await web_search(search_terms, max_results=5)
+        context = format_results_for_llm(results, search_terms)
+
+        # Build system prompt for summarization
+        system_prompt = """You are JARVIS — inspired by the JARVIS from Iron Man.
+You just fetched live web results for Sir. Your job is to:
+1. Summarize the most useful information from the search results in a crisp, natural way.
+2. Sound like a well-informed companion sharing what you found — not a search engine dumping links.
+3. If you found company info, people, or facts — present them clearly.
+4. Keep it concise. 3-5 sentences max for casual queries. More detail only if genuinely needed.
+5. If results are thin or unclear, say so honestly and share what little you found.
+6. NEVER start with "Certainly!" or "Of course!" or robotic openers.
+7. End naturally — mention that you've stored this for future reference if relevant."""
+
+        user_prompt = (
+            f"Sir asked: \"{user_query}\"\n\n"
+            f"Here are the live web results I found:\n\n{context}\n\n"
+            f"Please summarize the key findings for Sir in your natural JARVIS style."
+        )
+
+        response_text = self._call_llm(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            temperature=0.5,
+        )
+
+        if not response_text:
+            if results:
+                # Fallback: format results directly without LLM
+                snippets = "\n".join([f"• **{r['title']}**: {r['snippet'][:120]}" for r in results[:3]])
+                response_text = f"Here's what I found about **{search_terms}**, Sir:\n\n{snippets}"
+            else:
+                response_text = f"I searched the web for **{search_terms}** but couldn't find useful results, Sir. Try a more specific search term."
+
+        # Auto-store findings into memory so JARVIS "learns" from this search
+        if results:
+            summary_for_memory = f"Web search about '{search_terms}': {results[0].get('snippet', '')[:300]}"
+            await memory_service.store(
+                content=summary_for_memory,
+                memory_type=MemoryType.FACT,
+                importance=0.6,
+                metadata={"source": "web_search", "query": search_terms},
+            )
+            logger.info(f"[WebSearch] 🧠 Stored web findings into JARVIS memory")
+
+        # Store conversation
+        await memory_service.store_conversation_summary(
+            user_message=user_query,
+            jarvis_response=response_text,
+            intent="web_search",
+        )
+
+        # Format sources for the response
+        search_sources = [
+            {"id": i+1, "title": r["title"], "vendor": r["url"], "score": 1.0}
+            for i, r in enumerate(results[:3])
+        ]
+
+        return {
+            "answer":  response_text,
+            "sources": search_sources,
+            "intent":  "web_search",
+            "mode":    "web_search",
         }
 
     async def _handle_memory_query(
