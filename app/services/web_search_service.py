@@ -84,19 +84,18 @@ def is_web_search_query(text: str) -> bool:
 def extract_search_query(text: str) -> str:
     """
     Extract the actual search terms from a web search request.
-    e.g. "find CHN technologies coimbatore details in web" → "CHN technologies coimbatore"
+    e.g. "find CHN technologies coimbatore details in web" → "CHN technologies coimbatore details"
     """
-    # Strip common command words
-    remove_patterns = [
-        r"^(please\s+)?(can you\s+)?(jarvis[,]?\s+)?",
-        r"\b(search|find|look up|fetch|get|check|google|bing)\b",
-        r"\b(the\s+)?(web|internet|online|google|bing)\b",
-        r"\b(for|in|on|from|via|about|details|information|info)\b",
-        r"\b(please|now|quickly|fast)\b",
-        r"\s{2,}",
-    ]
     cleaned = text.lower().strip()
-    for pat in remove_patterns:
-        cleaned = re.sub(pat, " ", cleaned)
-
-    return cleaned.strip().rstrip("?.,!")
+    
+    # 1. Remove introductory fluff
+    cleaned = re.sub(r"^(please\s+)?(can you\s+)?(jarvis[,]?\s+)?(search|find|look up|fetch|get|check|google|bing)\s+(for\s+)?", "", cleaned)
+    
+    # 2. Remove terminal "in web", "online", etc.
+    cleaned = re.sub(r"\s+(in|on|from|via|at|the)?\s*(web|internet|online|google|bing|net)$", "", cleaned)
+    
+    # 3. Clean up extra spaces
+    cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
+    
+    # If we stripped everything, fallback to the original text
+    return cleaned if len(cleaned) > 2 else text.strip()
