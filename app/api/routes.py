@@ -310,7 +310,7 @@ async def health_check(rag: RAGService = Depends(get_rag_service)):
 
     return status
 
-@router.post(/"notifications/monthly-trigger/")
+@router.post("/notifications/monthly-trigger/")
 async def trigger_monthly_notification():
     """Trigger the monthly service alert email from Apps Script."""
     success = await NotificationService._call_apps_script("triggerEmailAlerts", {})
